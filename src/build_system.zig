@@ -1,0 +1,1141 @@
+const std = @import("std");
+const log = std.log.scoped(.build_system);
+const Allocator = std.mem.Allocator;
+const sqlite = @import("sqlite");
+const lib = @import("zig_pkg_checker_lib");
+
+const zzz = @import("zzz");
+const tardy = zzz.tardy;
+const Tardy = tardy.Tardy(.auto);
+const Runtime = tardy.Runtime;
+
+pub const BuildError = error{
+    DockerNotFound,
+    BuildFailed,
+    InvalidPackageUrl,
+    DatabaseError,
+    AllocationError,
+    ProcessFailed,
+    TardyError,
+    OutOfMemory,
+};
+
+pub const ZigVersion = enum {
+    master,
+    @"0.14.0",
+    @"0.13.0",
+    @"0.12.0",
+
+    pub fn toString(self: ZigVersion) []const u8 {
+        return switch (self) {
+            .master => "master",
+            .@"0.14.0" => "0.14.0",
+            .@"0.13.0" => "0.13.0",
+            .@"0.12.0" => "0.12.0",
+        };
+    }
+
+    pub fn dockerImage(self: ZigVersion) []const u8 {
+        return switch (self) {
+            .master => "zig-checker:master",
+            .@"0.14.0" => "zig-checker:0.14.0",
+            .@"0.13.0" => "zig-checker:0.13.0",
+            .@"0.12.0" => "zig-checker:0.12.0",
+        };
+    }
+};
+
+pub const BuildResult = struct {
+    build_id: []const u8,
+    package_name: []const u8,
+    repo_url: []const u8,
+    zig_version: []const u8,
+    start_time: []const u8,
+    build_status: []const u8, // "success", "failed", "pending"
+    test_status: ?[]const u8, // "success", "failed", "no_tests", null
+    error_log: []const u8,
+    build_log: []const u8,
+    end_time: ?[]const u8,
+
+    pub fn deinit(self: *BuildResult, allocator: Allocator) void {
+        allocator.free(self.build_id);
+        allocator.free(self.package_name);
+        allocator.free(self.repo_url);
+        allocator.free(self.zig_version);
+        allocator.free(self.start_time);
+        allocator.free(self.build_status);
+        if (self.test_status) |ts| allocator.free(ts);
+        allocator.free(self.error_log);
+        allocator.free(self.build_log);
+        if (self.end_time) |et| allocator.free(et);
+    }
+};
+
+/// Task context for async build execution
+const BuildTask = struct {
+    allocator: Allocator,
+    db: *sqlite.Database,
+    package_id: i64,
+    package_name: []const u8,
+    repo_url: []const u8,
+    version: ZigVersion,
+
+    pub fn deinit(self: *const BuildTask) void {
+        self.allocator.free(self.package_name);
+        self.allocator.free(self.repo_url);
+    }
+};
+
+pub const BuildSystem = struct {
+    allocator: Allocator,
+    db: *sqlite.Database,
+    tardy_instance: *Tardy,
+    runtime: ?*Runtime,
+    db_mutex: std.Thread.Mutex,
+
+    const Self = @This();
+
+    pub fn init(allocator: Allocator, db: *sqlite.Database, tardy_instance: *Tardy) Self {
+        return Self{
+            .allocator = allocator,
+            .db = db,
+            .tardy_instance = tardy_instance,
+            .runtime = null,
+            .db_mutex = std.Thread.Mutex{},
+        };
+    }
+
+    pub fn setRuntime(self: *Self, runtime: *Runtime) void {
+        self.runtime = runtime;
+    }
+
+    pub fn deinit(self: *Self) void {
+        _ = self;
+        // Nothing to cleanup for now
+    }
+
+    /// Check if Docker is available
+    pub fn checkDockerAvailable(self: *Self) BuildError!bool {
+        const result = std.process.Child.run(.{
+            .allocator = self.allocator,
+            .argv = &[_][]const u8{ "docker", "--version" },
+        }) catch |err| {
+            log.err("Failed to execute 'docker --version' command at {s}:{}: {}", .{ @src().file, @src().line, err });
+            return BuildError.DockerNotFound;
+        };
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        const success = result.term == .Exited and result.term.Exited == 0;
+        if (!success) {
+            log.err("Docker command failed at {s}:{} - exit code: {}, stderr: {s}", .{ @src().file, @src().line, result.term, result.stderr });
+        } else {
+            log.debug("Docker is available - stdout: {s}", .{result.stdout});
+        }
+
+        return success;
+    }
+
+    /// Build Docker images for all Zig versions
+    pub fn buildDockerImages(self: *Self) BuildError!void {
+        const versions = [_]ZigVersion{ .master, .@"0.14.0", .@"0.13.0", .@"0.12.0" };
+
+        for (versions) |version| {
+            try self.buildDockerImage(version);
+        }
+    }
+
+    /// Build Docker image for a specific Zig version
+    pub fn buildDockerImage(self: *Self, version: ZigVersion) BuildError!void {
+        const version_str = version.toString();
+        const docker_dir = try std.fmt.allocPrint(self.allocator, "docker/zig-{s}", .{version_str});
+        defer self.allocator.free(docker_dir);
+
+        const image_name = version.dockerImage();
+
+        log.info("Building Docker image for Zig {s}...", .{version_str});
+
+        const result = std.process.Child.run(.{
+            .allocator = self.allocator,
+            .argv = &[_][]const u8{ "docker", "build", "-t", image_name, docker_dir },
+            .max_output_bytes = 50 * 1024 * 1024, // 50MB buffer for Docker build output
+        }) catch |err| {
+            log.err("Failed to execute docker build command for Zig {s} at {s}:{}: {}", .{ version_str, @src().file, @src().line, err });
+            log.err("Command attempted: docker build -t {s} {s}", .{ image_name, docker_dir });
+            return BuildError.ProcessFailed;
+        };
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        if (result.term != .Exited or result.term.Exited != 0) {
+            log.err("Docker build failed for Zig {s} at {s}:{} - exit code: {}, stderr: {s}", .{ version_str, @src().file, @src().line, result.term, result.stderr });
+            if (result.stdout.len > 0) {
+                log.err("Docker build stdout: {s}", .{result.stdout});
+            }
+            return BuildError.BuildFailed;
+        }
+
+        log.info("Successfully built Docker image for Zig {s}", .{version_str});
+    }
+
+    /// Start builds for a package across all Zig versions
+    pub fn startPackageBuilds(self: *Self, package_id: i64, package_name: []const u8, repo_url: []const u8) BuildError!void {
+        const versions = [_]ZigVersion{ .master, .@"0.14.0", .@"0.13.0", .@"0.12.0" };
+
+        // Check if Docker is available
+        const docker_available = self.checkDockerAvailable() catch false;
+        if (!docker_available) {
+            log.err("Docker not available, cannot start builds for package {s}", .{package_name});
+            return BuildError.DockerNotFound;
+        }
+
+        // Build Docker images on-demand (only if they don't exist)
+        log.info("Ensuring Docker images are available for package {s}...", .{package_name});
+        for (versions) |version| {
+            self.ensureDockerImage(version) catch |err| {
+                log.err("Failed to ensure Docker image for Zig {s}: {}", .{ version.toString(), err });
+                // Continue with other versions even if one fails
+            };
+        }
+
+        // Mark all builds as pending first
+        for (versions) |version| {
+            try self.markBuildPending(package_id, version.toString());
+        }
+
+        // Spawn actual Docker builds using proper async execution
+        for (versions) |version| {
+            log.info("Starting build for {s} with Zig {s} from {s}", .{ package_name, version.toString(), repo_url });
+
+            // Create copies of the data for the background task since they may go out of scope
+            const package_name_copy = self.allocator.dupe(u8, package_name) catch |err| {
+                log.err("Failed to allocate memory for package name copy (package: {s}, version: {s}): {}", .{ package_name, version.toString(), err });
+                continue;
+            };
+
+            const repo_url_copy = self.allocator.dupe(u8, repo_url) catch |err| {
+                log.err("Failed to allocate memory for repo URL copy (repo: {s}, version: {s}): {}", .{ repo_url, version.toString(), err });
+                self.allocator.free(package_name_copy);
+                continue;
+            };
+
+            // Check if we have Runtime available for async execution
+            if (self.runtime) |rt| {
+                // Create task context for async execution
+                const task_context = BuildTask{
+                    .allocator = self.allocator,
+                    .db = self.db,
+                    .package_id = package_id,
+                    .package_name = package_name_copy,
+                    .repo_url = repo_url_copy,
+                    .version = version,
+                };
+
+                // Spawn async build task with proper context
+                rt.spawn(.{ rt, task_context }, buildTaskFrame, 1024 * 64) catch |err| {
+                    log.err("Failed to spawn build task for {s} with Zig {s} at {s}:{}: {}", .{ package_name, version.toString(), @src().file, @src().line, err });
+
+                    // Cleanup on spawn failure
+                    self.allocator.free(package_name_copy);
+                    self.allocator.free(repo_url_copy);
+                    continue;
+                };
+
+                log.debug("Successfully spawned async build task for {s} with Zig {s}", .{ package_name, version.toString() });
+            } else {
+                // Fallback to synchronous execution if no Runtime available
+                log.debug("No Runtime available, using synchronous execution for {s} with Zig {s} at {s}:{}", .{ package_name, version.toString(), @src().file, @src().line });
+
+                self.executeBuildInDockerCore(package_id, package_name_copy, repo_url_copy, version) catch |err| {
+                    log.err("Synchronous build failed for {s} with Zig {s} at {s}:{}: {}", .{ package_name, version.toString(), @src().file, @src().line, err });
+                    self.allocator.free(package_name_copy);
+                    self.allocator.free(repo_url_copy);
+                    continue;
+                };
+
+                // Cleanup allocated memory after synchronous execution
+                self.allocator.free(package_name_copy);
+                self.allocator.free(repo_url_copy);
+            }
+        }
+
+        log.info("Started builds for {s} across {d} Zig versions", .{ package_name, versions.len });
+    }
+
+    /// Async frame function for build tasks
+    fn buildTaskFrame(rt: *Runtime, task: BuildTask) !void {
+        log.debug("Starting async build task for package {d} with Zig {s}", .{ task.package_id, task.version.toString() });
+
+        defer {
+            // Cleanup task context
+            task.deinit();
+            log.debug("Build task completed and cleaned up for package {d} with Zig {s}", .{ task.package_id, task.version.toString() });
+        }
+
+        // Execute the build using the context data
+        var build_system = BuildSystem{
+            .allocator = task.allocator,
+            .db = task.db,
+            .tardy_instance = undefined, // Not needed for core execution
+            .runtime = rt,
+            .db_mutex = std.Thread.Mutex{},
+        };
+
+        build_system.executeBuildInDockerCore(task.package_id, task.package_name, task.repo_url, task.version) catch |err| {
+            log.err("Async Docker build failed for package {d} with Zig {s}: {}", .{ task.package_id, task.version.toString(), err });
+
+            // Update database with failure status
+            build_system.updateBuildResult(task.package_id, task.version.toString(), "failed", null, "Async build execution failed", "") catch |db_err| {
+                log.err("Failed to update build result after async failure: {}", .{db_err});
+            };
+        };
+    }
+
+    /// Ensure Docker image exists, build it if it doesn't
+    fn ensureDockerImage(self: *Self, version: ZigVersion) BuildError!void {
+        const image_name = version.dockerImage();
+
+        // Check if image exists
+        const check_result = std.process.Child.run(.{
+            .allocator = self.allocator,
+            .argv = &[_][]const u8{ "docker", "image", "inspect", image_name },
+            .max_output_bytes = 1024 * 1024, // 1MB buffer for image inspect JSON output
+        }) catch |err| {
+            log.err("Failed to execute 'docker image inspect {s}' command: {}", .{ image_name, err });
+            return BuildError.ProcessFailed;
+        };
+        defer self.allocator.free(check_result.stdout);
+        defer self.allocator.free(check_result.stderr);
+
+        if (check_result.term == .Exited and check_result.term.Exited == 0) {
+            // Image exists, no need to build
+            log.info("Docker image {s} already exists", .{image_name});
+            return;
+        }
+
+        // Image doesn't exist, build it
+        log.info("Docker image {s} not found (exit code: {}), building it now...", .{ image_name, check_result.term });
+        if (check_result.stderr.len > 0) {
+            log.debug("Docker inspect stderr: {s}", .{check_result.stderr});
+        }
+        try self.buildDockerImage(version);
+    }
+
+    /// Core Docker build execution without Runtime dependency
+    fn executeBuildInDockerCore(self: *Self, package_id: i64, package_name: []const u8, repo_url: []const u8, version: ZigVersion) BuildError!void {
+        log.debug("Executing core Docker build for package {d}, Zig {s} (no Runtime)", .{ package_id, version.toString() });
+
+        const build_id = std.fmt.allocPrint(self.allocator, "{d}-{s}-{d}", .{ package_id, version.toString(), std.time.timestamp() }) catch |err| {
+            log.err("Failed to allocate memory for build_id (package_id: {d}, version: {s}): {}", .{ package_id, version.toString(), err });
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(build_id);
+
+        const container_name = std.fmt.allocPrint(self.allocator, "build-{s}", .{build_id}) catch |err| {
+            log.err("Failed to allocate memory for container_name (build_id: {s}): {}", .{ build_id, err });
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(container_name);
+
+        // Create a dedicated results directory if it doesn't exist
+        const results_dir = "/tmp/zig_pkg_checker_results";
+        std.fs.cwd().makeDir(results_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {}, // Directory already exists, which is fine
+            else => {
+                log.err("Failed to create results directory {s}: {}", .{ results_dir, err });
+                return BuildError.ProcessFailed;
+            },
+        };
+
+        const result_filename = std.fmt.allocPrint(self.allocator, "build_result_{s}.json", .{build_id}) catch |err| {
+            log.err("Failed to allocate memory for result filename (build_id: {s}): {}", .{ build_id, err });
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(result_filename);
+
+        const host_result_file = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ results_dir, result_filename }) catch |err| {
+            log.err("Failed to allocate memory for host result file path (build_id: {s}): {}", .{ build_id, err });
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(host_result_file);
+
+        const container_result_file = std.fmt.allocPrint(self.allocator, "/results/{s}", .{result_filename}) catch |err| {
+            log.err("Failed to allocate memory for container result file path (build_id: {s}): {}", .{ build_id, err });
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(container_result_file);
+
+        log.info("Executing Docker build for {s} with Zig {s} (build_id: {s})", .{ package_name, version.toString(), build_id });
+
+        // Prepare environment variables
+        const repo_env = std.fmt.allocPrint(self.allocator, "REPO_URL={s}", .{repo_url}) catch |err| {
+            log.err("Failed to allocate memory for repo_env (repo_url: {s}): {}", .{ repo_url, err });
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(repo_env);
+
+        const name_env = std.fmt.allocPrint(self.allocator, "PACKAGE_NAME={s}", .{package_name}) catch |err| {
+            log.err("Failed to allocate memory for name_env (package_name: {s}): {}", .{ package_name, err });
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(name_env);
+
+        const id_env = std.fmt.allocPrint(self.allocator, "BUILD_ID={s}", .{build_id}) catch |err| {
+            log.err("Failed to allocate memory for id_env (build_id: {s}): {}", .{ build_id, err });
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(id_env);
+
+        const file_env = std.fmt.allocPrint(self.allocator, "RESULT_FILE={s}", .{container_result_file}) catch |err| {
+            log.err("Failed to allocate memory for file_env (container_result_file: {s}): {}", .{ container_result_file, err });
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(file_env);
+
+        // Mount the results directory instead of individual files
+        const volume_mount = std.fmt.allocPrint(self.allocator, "{s}:/results", .{results_dir}) catch |err| {
+            log.err("Failed to allocate memory for volume_mount (results_dir: {s}): {}", .{ results_dir, err });
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(volume_mount);
+
+        // Create argument array with proper memory management
+        const docker_args = [_][]const u8{
+            "docker",      "run",      "--rm",                "--name", container_name,
+            "-e",          repo_env,   "-e",                  name_env, "-e",
+            id_env,        "-e",       file_env,              "-v",     volume_mount,
+            "--memory=2g", "--cpus=2", version.dockerImage(),
+        };
+
+        log.debug("Executing docker command: docker run --rm --name {s} -e {s} -e {s} -e {s} -e {s} -v {s} --memory=2g --cpus=2 {s}", .{ container_name, repo_env, name_env, id_env, file_env, volume_mount, version.dockerImage() });
+
+        // Execute Docker container
+        const result = std.process.Child.run(.{
+            .allocator = self.allocator,
+            .argv = &docker_args,
+            .max_output_bytes = 50 * 1024 * 1024, // 50MB buffer for Docker build output
+        }) catch |err| {
+            log.err("Failed to execute docker run command for build {s}: {}", .{ build_id, err });
+            log.err("Command attempted: docker run --rm --name {s} [env vars] {s}", .{ container_name, version.dockerImage() });
+            return BuildError.ProcessFailed;
+        };
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        if (result.term != .Exited or result.term.Exited != 0) {
+            log.err("Docker container failed for {s}: {s}", .{ build_id, result.stderr });
+            log.err("Docker container stdout: {s}", .{result.stdout});
+            log.err("Exit code: {}", .{result.term});
+            log.err("Container name: {s}, Image: {s}", .{ container_name, version.dockerImage() });
+
+            // Extract meaningful error from stdout which contains the actual build output
+            const meaningful_error = self.extractBuildError(result.stdout, result.stderr) catch |err| blk: {
+                log.err("Failed to extract build error: {}", .{err});
+                // Provide fallback error message
+                const fallback = if (result.stderr.len > 0) result.stderr else "Docker build failed with unknown error";
+                break :blk self.allocator.dupe(u8, fallback) catch "Docker build failed with unknown error";
+            };
+            defer self.allocator.free(meaningful_error);
+
+            self.updateBuildResult(package_id, version.toString(), "failed", null, meaningful_error, "") catch |db_err| {
+                log.err("Failed to update build result after Docker failure: {}", .{db_err});
+            };
+            return BuildError.BuildFailed;
+        }
+
+        log.info("Docker container completed successfully for build {s}", .{build_id});
+
+        // Wait a moment for the container to write the result file
+        std.time.sleep(2 * std.time.ns_per_s);
+
+        // Process the result file using the host path
+        self.processBuildResultFile(package_id, version.toString(), host_result_file) catch |err| {
+            log.err("Failed to process build result file: {}", .{err});
+            self.updateBuildResult(package_id, version.toString(), "failed", null, "Failed to process result file", "") catch |db_err| {
+                log.err("Failed to update build result after processing failure: {}", .{db_err});
+            };
+        };
+
+        // Clean up result file
+        std.fs.cwd().deleteFile(host_result_file) catch |err| {
+            log.warn("Failed to cleanup result file {s}: {}", .{ host_result_file, err });
+        };
+    }
+
+    /// Process build result file and update database
+    fn processBuildResultFile(self: *Self, package_id: i64, zig_version: []const u8, result_file: []const u8) BuildError!void {
+        log.debug("Processing build result file: {s} for package {d}, Zig {s}", .{ result_file, package_id, zig_version });
+
+        // Try to read the result file
+        const file = std.fs.cwd().openFile(result_file, .{}) catch |err| {
+            log.err("Failed to open build result file {s} for package {d}, Zig {s}: {}", .{ result_file, package_id, zig_version, err });
+            return BuildError.ProcessFailed;
+        };
+        defer file.close();
+
+        const content = file.readToEndAlloc(self.allocator, 1024 * 1024) catch |err| {
+            log.err("Failed to read build result file {s} for package {d}, Zig {s}: {}", .{ result_file, package_id, zig_version, err });
+            return BuildError.ProcessFailed;
+        };
+        defer self.allocator.free(content);
+
+        log.debug("Build result file content length: {d} bytes", .{content.len});
+        if (content.len == 0) {
+            log.warn("Build result file {s} is empty for package {d}, Zig {s}", .{ result_file, package_id, zig_version });
+        }
+
+        // Parse the JSON content (simplified parsing)
+        self.processBuildResult(package_id, zig_version, content) catch |err| {
+            log.err("Failed to parse build result JSON for package {d}, Zig {s}: {}", .{ package_id, zig_version, err });
+            log.err("JSON content preview (first 200 chars): {s}", .{if (content.len > 200) content[0..200] else content});
+            return err;
+        };
+    }
+
+    /// Mark a build as pending in the database
+    fn markBuildPending(self: *Self, package_id: i64, zig_version: []const u8) BuildError!void {
+        log.debug("Marking build as pending for package {d} with Zig {s}", .{ package_id, zig_version });
+
+        // Lock database mutex for thread safety
+        self.db_mutex.lock();
+        defer self.db_mutex.unlock();
+
+        // First check if the package exists to avoid foreign key constraint issues
+        const PackageCheck = struct { count: i64 };
+        const check_stmt = self.db.prepare(struct { package_id: i64 }, PackageCheck, "SELECT COUNT(*) as count FROM packages WHERE id = :package_id") catch |err| {
+            log.err("Failed to prepare package existence check for package {d}: {}", .{ package_id, err });
+            return BuildError.DatabaseError;
+        };
+        defer check_stmt.finalize();
+
+        check_stmt.bind(.{ .package_id = package_id }) catch |err| {
+            log.err("Failed to bind package_id {d} for existence check: {}", .{ package_id, err });
+            return BuildError.DatabaseError;
+        };
+        defer check_stmt.reset();
+
+        const package_exists = if (check_stmt.step() catch null) |result| result.count > 0 else false;
+        if (!package_exists) {
+            log.err("Package {d} does not exist, cannot mark build as pending", .{package_id});
+            return BuildError.DatabaseError;
+        }
+
+        // Make defensive copy of zig_version to ensure string lifetime
+        const zig_version_copy = self.allocator.dupe(u8, zig_version) catch |err| {
+            log.err("Failed to allocate memory for zig_version copy: {}", .{err});
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(zig_version_copy);
+
+        // Use prepared statement for better memory safety
+        const InsertParams = struct {
+            package_id: i64,
+            zig_version: sqlite.Text,
+            build_status: sqlite.Text,
+        };
+
+        const query = "INSERT OR REPLACE INTO build_results (package_id, zig_version, build_status) VALUES (:package_id, :zig_version, :build_status)";
+
+        const stmt = self.db.prepare(InsertParams, void, query) catch |err| {
+            log.err("Failed to prepare pending build insert statement for package {d} with Zig {s}: {}", .{ package_id, zig_version, err });
+            return BuildError.DatabaseError;
+        };
+        defer stmt.finalize();
+
+        stmt.bind(.{
+            .package_id = package_id,
+            .zig_version = sqlite.text(zig_version_copy),
+            .build_status = sqlite.text("pending"),
+        }) catch |err| {
+            log.err("Failed to bind parameters for pending build insert for package {d} with Zig {s}: {}", .{ package_id, zig_version, err });
+            return BuildError.DatabaseError;
+        };
+        defer stmt.reset();
+
+        _ = stmt.step() catch |err| {
+            log.err("Database error when marking build as pending for package {d} with Zig {s}: {}", .{ package_id, zig_version, err });
+            log.err("SQL query: {s}", .{query});
+            log.err("Parameters: package_id={d}, zig_version={s}, status=pending", .{ package_id, zig_version_copy });
+            return BuildError.DatabaseError;
+        };
+
+        log.info("Marked build as pending for package {d} with Zig {s}", .{ package_id, zig_version });
+    }
+
+    /// Process build result JSON and update database
+    fn processBuildResult(self: *Self, package_id: i64, zig_version: []const u8, json_content: []const u8) BuildError!void {
+        log.debug("Processing JSON content: {s}", .{json_content});
+
+        // Use proper JSON parsing instead of string matching
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, json_content, .{ .ignore_unknown_fields = true }) catch |err| {
+            log.err("Failed to parse JSON for package {d}, Zig {s}: {}", .{ package_id, zig_version, err });
+            // Fallback to string parsing
+            return self.processBuildResultFallback(package_id, zig_version, json_content);
+        };
+        defer parsed.deinit();
+
+        // Extract strings from JSON and make defensive copies immediately
+        // to ensure they remain valid after parsed.deinit()
+        const build_status_from_json: []const u8 = if (parsed.value.object.get("build_status")) |status_val|
+            switch (status_val) {
+                .string => |s| s,
+                else => "failed",
+            }
+        else
+            "failed";
+
+        const build_status = self.allocator.dupe(u8, build_status_from_json) catch |err| {
+            log.err("Failed to allocate memory for build_status: {}", .{err});
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(build_status);
+
+        const test_status_from_json: ?[]const u8 = if (parsed.value.object.get("test_status")) |test_val|
+            switch (test_val) {
+                .string => |s| s,
+                .null => null,
+                else => null,
+            }
+        else
+            null;
+
+        const test_status = if (test_status_from_json) |ts| self.allocator.dupe(u8, ts) catch |err| {
+            log.err("Failed to allocate memory for test_status: {}", .{err});
+            return BuildError.AllocationError;
+        } else null;
+        defer if (test_status) |ts| self.allocator.free(ts);
+
+        var error_log_from_json: []const u8 = if (parsed.value.object.get("error_log")) |error_val|
+            switch (error_val) {
+                .string => |s| std.mem.trim(u8, s, " \t\n\r"),
+                else => "",
+            }
+        else
+            "";
+
+        // If build failed but error_log is empty, try to extract error from build_log or other fields
+        var extracted_error: ?[]const u8 = null;
+        if (std.mem.eql(u8, build_status_from_json, "failed") and error_log_from_json.len == 0) {
+            // Try to get error from build_log field
+            const build_log_maybe: []const u8 = if (parsed.value.object.get("build_log")) |log_val|
+                switch (log_val) {
+                    .string => |s| std.mem.trim(u8, s, " \t\n\r"),
+                    else => "",
+                }
+            else
+                "";
+
+            if (build_log_maybe.len > 0) {
+                // Try to extract meaningful error from build_log
+                extracted_error = self.extractBuildErrorFromText(build_log_maybe) catch |err| blk: {
+                    log.err("Failed to extract error from build_log: {}", .{err});
+                    break :blk null;
+                };
+                if (extracted_error) |ee| {
+                    error_log_from_json = ee;
+                }
+            } else {
+                error_log_from_json = "Build failed but no error details available";
+            }
+        }
+        defer if (extracted_error) |ee| self.allocator.free(ee);
+
+        const error_log = self.allocator.dupe(u8, error_log_from_json) catch |err| {
+            log.err("Failed to allocate memory for error_log: {}", .{err});
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(error_log);
+
+        const build_log_from_json: []const u8 = if (parsed.value.object.get("build_log")) |log_val|
+            switch (log_val) {
+                .string => |s| std.mem.trim(u8, s, " \t\n\r"),
+                else => "",
+            }
+        else
+            "";
+
+        const build_log = self.allocator.dupe(u8, build_log_from_json) catch |err| {
+            log.err("Failed to allocate memory for build_log: {}", .{err});
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(build_log);
+
+        log.debug("Parsed JSON - build_status: {s}, test_status: {s}, error_log: '{s}' (length: {d})", .{ build_status, if (test_status) |ts| ts else "null", error_log, error_log.len });
+
+        try self.updateBuildResult(package_id, zig_version, build_status, test_status, error_log, build_log);
+    }
+
+    /// Fallback JSON processing using string matching (for malformed JSON)
+    fn processBuildResultFallback(self: *Self, package_id: i64, zig_version: []const u8, json_content: []const u8) BuildError!void {
+        log.warn("Using fallback JSON parsing for package {d}, Zig {s}", .{ package_id, zig_version });
+
+        const build_status: []const u8 = if (std.mem.indexOf(u8, json_content, "\"build_status\": \"success\"")) |_| "success" else "failed";
+
+        const test_status: ?[]const u8 = if (std.mem.indexOf(u8, json_content, "\"test_status\": \"success\"")) |_|
+            "success"
+        else if (std.mem.indexOf(u8, json_content, "\"test_status\": \"failed\"")) |_|
+            "failed"
+        else if (std.mem.indexOf(u8, json_content, "\"test_status\": \"no_tests\"")) |_|
+            "no_tests"
+        else if (std.mem.indexOf(u8, json_content, "\"test_status\": null")) |_|
+            null
+        else
+            null;
+
+        // Improved error_log extraction
+        const error_log: []const u8 = blk: {
+            if (std.mem.indexOf(u8, json_content, "\"error_log\": \"")) |start| {
+                const log_start = start + 14; // Length of "\"error_log\": \""
+                // Handle empty string case
+                if (json_content.len > log_start + 1 and json_content[log_start] == '"') {
+                    break :blk ""; // Empty error log
+                }
+                // Find the closing quote, handling escaped quotes
+                var pos = log_start;
+                while (pos < json_content.len) {
+                    if (json_content[pos] == '"' and (pos == log_start or json_content[pos - 1] != '\\')) {
+                        const extracted = json_content[log_start..pos];
+                        break :blk std.mem.trim(u8, extracted, " \t\n\r");
+                    }
+                    pos += 1;
+                }
+            }
+            break :blk "";
+        };
+
+        const build_log = ""; // Will be extracted when proper JSON parsing is implemented
+
+        try self.updateBuildResult(package_id, zig_version, build_status, test_status, error_log, build_log);
+    }
+
+    /// Update build result in database
+    fn updateBuildResult(self: *Self, package_id: i64, zig_version: []const u8, build_status: []const u8, test_status: ?[]const u8, error_log: []const u8, build_log: []const u8) BuildError!void {
+        _ = build_log; // Will be used when proper JSON parsing is implemented
+
+        log.debug("Updating build result for package {d} with Zig {s}: status={s}, test_status={s}", .{ package_id, zig_version, build_status, if (test_status) |ts| ts else "null" });
+
+        // Lock database mutex for thread safety
+        self.db_mutex.lock();
+        defer self.db_mutex.unlock();
+
+        // Make defensive copies of all string parameters to ensure they remain valid during SQLite operation
+        const build_status_copy = self.allocator.dupe(u8, build_status) catch |err| {
+            log.err("Failed to allocate memory for build_status copy: {}", .{err});
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(build_status_copy);
+
+        const test_status_copy = if (test_status) |ts| self.allocator.dupe(u8, ts) catch |err| {
+            log.err("Failed to allocate memory for test_status copy: {}", .{err});
+            return BuildError.AllocationError;
+        } else null;
+        defer if (test_status_copy) |ts| self.allocator.free(ts);
+
+        const error_log_copy = self.allocator.dupe(u8, error_log) catch |err| {
+            log.err("Failed to allocate memory for error_log copy: {}", .{err});
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(error_log_copy);
+
+        const zig_version_copy = self.allocator.dupe(u8, zig_version) catch |err| {
+            log.err("Failed to allocate memory for zig_version copy: {}", .{err});
+            return BuildError.AllocationError;
+        };
+        defer self.allocator.free(zig_version_copy);
+
+        // Use prepared statements for better memory safety and performance
+        if (test_status_copy) |ts| {
+            // Update with test_status
+            const UpdateParams = struct {
+                build_status: sqlite.Text,
+                test_status: sqlite.Text,
+                error_log: sqlite.Text,
+                package_id: i64,
+                zig_version: sqlite.Text,
+            };
+
+            const query = "UPDATE build_results SET build_status = :build_status, test_status = :test_status, error_log = :error_log, last_checked = CURRENT_TIMESTAMP WHERE package_id = :package_id AND zig_version = :zig_version";
+
+            const stmt = self.db.prepare(UpdateParams, void, query) catch |err| {
+                log.err("Failed to prepare update statement with test_status for package {d} with Zig {s}: {}", .{ package_id, zig_version, err });
+                return BuildError.DatabaseError;
+            };
+            defer stmt.finalize();
+
+            stmt.bind(.{
+                .build_status = sqlite.text(build_status_copy),
+                .test_status = sqlite.text(ts),
+                .error_log = sqlite.text(error_log_copy),
+                .package_id = package_id,
+                .zig_version = sqlite.text(zig_version_copy),
+            }) catch |err| {
+                log.err("Failed to bind parameters for update with test_status for package {d} with Zig {s}: {}", .{ package_id, zig_version, err });
+                return BuildError.DatabaseError;
+            };
+            defer stmt.reset();
+
+            _ = stmt.step() catch |err| {
+                log.err("Database error when updating build result with test_status for package {d} with Zig {s}: {}", .{ package_id, zig_version, err });
+                log.err("SQL query: {s}", .{query});
+                log.err("Parameters: build_status={s}, test_status={s}, error_log={s}, package_id={d}, zig_version={s}", .{ build_status_copy, ts, error_log_copy, package_id, zig_version_copy });
+                return BuildError.DatabaseError;
+            };
+        } else {
+            // Update without test_status (set to NULL)
+            const UpdateParams = struct {
+                build_status: sqlite.Text,
+                error_log: sqlite.Text,
+                package_id: i64,
+                zig_version: sqlite.Text,
+            };
+
+            const query = "UPDATE build_results SET build_status = :build_status, test_status = NULL, error_log = :error_log, last_checked = CURRENT_TIMESTAMP WHERE package_id = :package_id AND zig_version = :zig_version";
+
+            const stmt = self.db.prepare(UpdateParams, void, query) catch |err| {
+                log.err("Failed to prepare update statement without test_status for package {d} with Zig {s}: {}", .{ package_id, zig_version, err });
+                return BuildError.DatabaseError;
+            };
+            defer stmt.finalize();
+
+            stmt.bind(.{
+                .build_status = sqlite.text(build_status_copy),
+                .error_log = sqlite.text(error_log_copy),
+                .package_id = package_id,
+                .zig_version = sqlite.text(zig_version_copy),
+            }) catch |err| {
+                log.err("Failed to bind parameters for update without test_status for package {d} with Zig {s}: {}", .{ package_id, zig_version, err });
+                return BuildError.DatabaseError;
+            };
+            defer stmt.reset();
+
+            _ = stmt.step() catch |err| {
+                log.err("Database error when updating build result without test_status for package {d} with Zig {s}: {}", .{ package_id, zig_version, err });
+                log.err("SQL query: {s}", .{query});
+                log.err("Parameters: build_status={s}, test_status=NULL, error_log={s}, package_id={d}, zig_version={s}", .{ build_status_copy, error_log_copy, package_id, zig_version_copy });
+                return BuildError.DatabaseError;
+            };
+        }
+
+        log.info("Updated build result for package {d} with Zig {s}: {s} (test: {s})", .{ package_id, zig_version, build_status, if (test_status) |ts| ts else "null" });
+
+        if (error_log.len > 0) {
+            log.err("Build error for package {d}: {s}", .{ package_id, error_log });
+        }
+    }
+
+    /// Get build results for a package
+    pub fn getBuildResults(self: *Self, package_id: i64) BuildError![]BuildResult {
+        log.debug("Getting build results for package {d}", .{package_id});
+
+        // Lock database mutex for thread safety
+        self.db_mutex.lock();
+        defer self.db_mutex.unlock();
+
+        // Prepare query to get build results for the package
+        const BuildResultRow = struct {
+            build_id: sqlite.Text,
+            package_name: sqlite.Text,
+            repo_url: sqlite.Text,
+            zig_version: sqlite.Text,
+            start_time: sqlite.Text,
+            build_status: sqlite.Text,
+            test_status: ?sqlite.Text,
+            error_log: sqlite.Text,
+            build_log: sqlite.Text,
+            end_time: ?sqlite.Text,
+        };
+
+        const query =
+            \\SELECT 
+            \\    CAST(br.package_id AS TEXT) || '-' || br.zig_version || '-' || strftime('%s', br.last_checked) as build_id,
+            \\    p.name as package_name,
+            \\    p.url as repo_url,
+            \\    br.zig_version,
+            \\    br.last_checked as start_time,
+            \\    br.build_status,
+            \\    br.test_status,
+            \\    COALESCE(br.error_log, '') as error_log,
+            \\    '' as build_log,
+            \\    br.last_checked as end_time
+            \\FROM build_results br
+            \\JOIN packages p ON br.package_id = p.id
+            \\WHERE br.package_id = ?
+            \\ORDER BY br.last_checked DESC
+        ;
+
+        const stmt = self.db.prepare(struct { package_id: i64 }, BuildResultRow, query) catch |err| {
+            log.err("Failed to prepare SQL statement for getting build results for package {d}: {}", .{ package_id, err });
+            log.err("SQL query: {s}", .{query});
+            return BuildError.DatabaseError;
+        };
+        defer stmt.finalize();
+
+        stmt.bind(.{ .package_id = package_id }) catch |err| {
+            log.err("Failed to bind package_id {d} to SQL statement: {}", .{ package_id, err });
+            return BuildError.DatabaseError;
+        };
+        defer stmt.reset();
+
+        // Collect results into an array
+        var results = std.ArrayList(BuildResult).init(self.allocator);
+        defer results.deinit();
+
+        var row_count: usize = 0;
+        while (stmt.step() catch |err| {
+            log.err("Failed to step through SQL results for package {d} at row {d}: {}", .{ package_id, row_count, err });
+            return null;
+        }) |row| {
+            row_count += 1;
+            log.debug("Processing build result row {d} for package {d}", .{ row_count, package_id });
+
+            const result = BuildResult{
+                .build_id = self.allocator.dupe(u8, row.build_id.data) catch |err| {
+                    log.err("Failed to allocate memory for build_id (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                    return BuildError.AllocationError;
+                },
+                .package_name = self.allocator.dupe(u8, row.package_name.data) catch |err| {
+                    log.err("Failed to allocate memory for package_name (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                    return BuildError.AllocationError;
+                },
+                .repo_url = self.allocator.dupe(u8, row.repo_url.data) catch |err| {
+                    log.err("Failed to allocate memory for repo_url (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                    return BuildError.AllocationError;
+                },
+                .zig_version = self.allocator.dupe(u8, row.zig_version.data) catch |err| {
+                    log.err("Failed to allocate memory for zig_version (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                    return BuildError.AllocationError;
+                },
+                .start_time = self.allocator.dupe(u8, row.start_time.data) catch |err| {
+                    log.err("Failed to allocate memory for start_time (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                    return BuildError.AllocationError;
+                },
+                .build_status = self.allocator.dupe(u8, row.build_status.data) catch |err| {
+                    log.err("Failed to allocate memory for build_status (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                    return BuildError.AllocationError;
+                },
+                .test_status = if (row.test_status) |ts| self.allocator.dupe(u8, ts.data) catch |err| {
+                    log.err("Failed to allocate memory for test_status (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                    return BuildError.AllocationError;
+                } else null,
+                .error_log = self.allocator.dupe(u8, row.error_log.data) catch |err| {
+                    log.err("Failed to allocate memory for error_log (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                    return BuildError.AllocationError;
+                },
+                .build_log = self.allocator.dupe(u8, row.build_log.data) catch |err| {
+                    log.err("Failed to allocate memory for build_log (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                    return BuildError.AllocationError;
+                },
+                .end_time = if (row.end_time) |et| self.allocator.dupe(u8, et.data) catch |err| {
+                    log.err("Failed to allocate memory for end_time (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                    return BuildError.AllocationError;
+                } else null,
+            };
+
+            results.append(result) catch |err| {
+                log.err("Failed to append BuildResult to results array (row {d}, package {d}): {}", .{ row_count, package_id, err });
+                return BuildError.AllocationError;
+            };
+        }
+
+        log.info("Retrieved {d} build results for package {d}", .{ row_count, package_id });
+
+        // Convert to owned slice
+        return results.toOwnedSlice() catch |err| {
+            log.err("Failed to convert results array to owned slice for package {d}: {}", .{ package_id, err });
+            return BuildError.AllocationError;
+        };
+    }
+
+    /// Cleanup old build containers and files
+    pub fn cleanup(self: *Self) BuildError!void {
+        log.info("Starting cleanup of old build containers and files", .{});
+
+        // Remove any stopped build containers
+        const cleanup_result = std.process.Child.run(.{
+            .allocator = self.allocator,
+            .argv = &[_][]const u8{ "docker", "container", "prune", "-f", "--filter", "label=zig-pkg-checker" },
+            .max_output_bytes = 10 * 1024 * 1024, // 10MB buffer should be enough for prune output
+        }) catch |err| {
+            log.err("Failed to execute docker container prune command: {}", .{err});
+            log.warn("Failed to cleanup Docker containers", .{});
+            return;
+        };
+        defer self.allocator.free(cleanup_result.stdout);
+        defer self.allocator.free(cleanup_result.stderr);
+
+        if (cleanup_result.term != .Exited or cleanup_result.term.Exited != 0) {
+            log.warn("Docker container prune completed with warnings - exit code: {}, stderr: {s}", .{ cleanup_result.term, cleanup_result.stderr });
+        } else {
+            log.info("Docker container cleanup completed successfully", .{});
+            if (cleanup_result.stdout.len > 0) {
+                log.debug("Docker prune stdout: {s}", .{cleanup_result.stdout});
+            }
+        }
+
+        // Clean up old result files from the dedicated results directory
+        const results_dir = "/tmp/zig_pkg_checker_results";
+        var results_dir_handle = std.fs.cwd().openDir(results_dir, .{ .iterate = true }) catch |err| {
+            if (err == error.FileNotFound) {
+                log.debug("Results directory {s} does not exist, skipping cleanup", .{results_dir});
+            } else {
+                log.err("Failed to open results directory {s} for cleanup: {}", .{ results_dir, err });
+            }
+            return;
+        };
+        defer results_dir_handle.close();
+
+        var results_iterator = results_dir_handle.iterate();
+        var deleted_count: usize = 0;
+        while (results_iterator.next() catch |err| {
+            log.err("Failed to iterate through results directory {s} at {s}:{}: {}", .{ results_dir, @src().file, @src().line, err });
+            return;
+        }) |entry| {
+            if (std.mem.startsWith(u8, entry.name, "build_result_") and std.mem.endsWith(u8, entry.name, ".json")) {
+                results_dir_handle.deleteFile(entry.name) catch |err| {
+                    log.warn("Failed to delete result file {s}: {}", .{ entry.name, err });
+                    continue;
+                };
+                deleted_count += 1;
+                log.debug("Deleted old result file: {s}", .{entry.name});
+            }
+        }
+
+        // Also clean up any old individual result files in /tmp (legacy cleanup)
+        var tmp_dir = std.fs.cwd().openDir("/tmp", .{ .iterate = true }) catch |err| {
+            log.err("Failed to open /tmp directory for legacy cleanup: {}", .{err});
+            return;
+        };
+        defer tmp_dir.close();
+
+        var tmp_iterator = tmp_dir.iterate();
+        while (tmp_iterator.next() catch |err| {
+            log.err("Failed to iterate through /tmp directory at {s}:{}: {}", .{ @src().file, @src().line, err });
+            return;
+        }) |entry| {
+            if (std.mem.startsWith(u8, entry.name, "build_result_") and std.mem.endsWith(u8, entry.name, ".json")) {
+                tmp_dir.deleteFile(entry.name) catch |err| {
+                    log.warn("Failed to delete legacy result file {s}: {}", .{ entry.name, err });
+                    continue;
+                };
+                deleted_count += 1;
+                log.debug("Deleted old legacy result file: {s}", .{entry.name});
+            }
+        }
+
+        log.info("Cleanup completed: deleted {d} old result files", .{deleted_count});
+    }
+
+    /// Extract meaningful error from Docker build output
+    fn extractBuildError(self: *Self, stdout: []const u8, stderr: []const u8) BuildError![]const u8 {
+        // Look for common Zig error patterns in stdout first
+        const error_patterns = [_][]const u8{
+            "error:",
+            "Build failed",
+            "unsupported zig version:",
+            "compilation terminated",
+            "build.zig:",
+            "fatal:",
+        };
+
+        // Search for error patterns in stdout (which contains the actual build output)
+        for (error_patterns) |pattern| {
+            if (std.mem.indexOf(u8, stdout, pattern)) |start_pos| {
+                // Extract a meaningful portion around the error
+                const line_start = std.mem.lastIndexOfScalar(u8, stdout[0..start_pos], '\n') orelse 0;
+                const line_end = std.mem.indexOfScalar(u8, stdout[start_pos..], '\n') orelse stdout.len - start_pos;
+
+                // Try to get a few lines of context
+                var extract_start = line_start;
+                var lines_before: u8 = 0;
+                while (lines_before < 2 and extract_start > 0) {
+                    const prev_line = std.mem.lastIndexOfScalar(u8, stdout[0 .. extract_start - 1], '\n') orelse 0;
+                    extract_start = prev_line;
+                    lines_before += 1;
+                }
+
+                var extract_end = start_pos + line_end;
+                var lines_after: u8 = 0;
+                while (lines_after < 3 and extract_end < stdout.len) {
+                    const next_line = std.mem.indexOfScalar(u8, stdout[extract_end + 1 ..], '\n') orelse break;
+                    extract_end += next_line + 1;
+                    lines_after += 1;
+                }
+
+                const extracted = stdout[extract_start..@min(extract_end, stdout.len)];
+
+                // Return a copy of the extracted error
+                return self.allocator.dupe(u8, std.mem.trim(u8, extracted, " \t\n\r")) catch |err| {
+                    log.err("Failed to allocate memory for extracted error: {}", .{err});
+                    return BuildError.AllocationError;
+                };
+            }
+        }
+
+        // If no specific error pattern found in stdout, check stderr
+        if (stderr.len > 0) {
+            return self.allocator.dupe(u8, std.mem.trim(u8, stderr, " \t\n\r")) catch |err| {
+                log.err("Failed to allocate memory for stderr error: {}", .{err});
+                return BuildError.AllocationError;
+            };
+        }
+
+        // Fallback to a generic error message
+        return self.allocator.dupe(u8, "Docker build failed with unknown error") catch |err| {
+            log.err("Failed to allocate memory for fallback error: {}", .{err});
+            return BuildError.AllocationError;
+        };
+    }
+
+    /// Extract meaningful error from text
+    fn extractBuildErrorFromText(self: *Self, text: []const u8) BuildError![]const u8 {
+        // Look for common Zig error patterns in text first
+        const error_patterns = [_][]const u8{
+            "error:",
+            "Build failed",
+            "unsupported zig version:",
+            "compilation terminated",
+            "build.zig:",
+            "fatal:",
+        };
+
+        // Search for error patterns in text (which contains the actual build output)
+        for (error_patterns) |pattern| {
+            if (std.mem.indexOf(u8, text, pattern)) |start_pos| {
+                // Extract a meaningful portion around the error
+                const line_start = std.mem.lastIndexOfScalar(u8, text[0..start_pos], '\n') orelse 0;
+                const line_end = std.mem.indexOfScalar(u8, text[start_pos..], '\n') orelse text.len - start_pos;
+
+                // Try to get a few lines of context
+                var extract_start = line_start;
+                var lines_before: u8 = 0;
+                while (lines_before < 2 and extract_start > 0) {
+                    const prev_line = std.mem.lastIndexOfScalar(u8, text[0 .. extract_start - 1], '\n') orelse 0;
+                    extract_start = prev_line;
+                    lines_before += 1;
+                }
+
+                var extract_end = start_pos + line_end;
+                var lines_after: u8 = 0;
+                while (lines_after < 3 and extract_end < text.len) {
+                    const next_line = std.mem.indexOfScalar(u8, text[extract_end + 1 ..], '\n') orelse break;
+                    extract_end += next_line + 1;
+                    lines_after += 1;
+                }
+
+                const extracted = text[extract_start..@min(extract_end, text.len)];
+
+                // Return a copy of the extracted error
+                return self.allocator.dupe(u8, std.mem.trim(u8, extracted, " \t\n\r")) catch |err| {
+                    log.err("Failed to allocate memory for extracted error: {}", .{err});
+                    return BuildError.AllocationError;
+                };
+            }
+        }
+
+        // If no specific error pattern found in text, return a generic error message
+        return self.allocator.dupe(u8, "Build failed with unknown error") catch |err| {
+            log.err("Failed to allocate memory for fallback error: {}", .{err});
+            return BuildError.AllocationError;
+        };
+    }
+};

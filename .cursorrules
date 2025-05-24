@@ -32,6 +32,7 @@
   - `libs/zig/lib/std` - Contains Zig standard library source codes
   - `libs/zzz` - Contains http framework source codes
   - `libs/zig-sqlite` - Contains sqlite3 source codes
+  - `libs/tardy` - Contains tardy source codes
 
 ### Search Strategy
 1. First search for the specific function, method, or concept you're working with
@@ -95,3 +96,5 @@ Before suggesting any changes, ensure:
 8. [ ] Code follows existing project conventions
 
 Remember: The goal is to maintain and extend this Telegram bot library while keeping it simple, maintainable, and well-documented. 
+
+Don't use TODO, FIXME, XXX, etc. in the code, only real implementation.

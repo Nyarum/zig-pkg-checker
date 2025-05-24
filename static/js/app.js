@@ -146,6 +146,53 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Check status every 30 seconds
     setInterval(updateStatus, 30000);
+
+    // Handle package submission form
+    const submitForm = document.getElementById('submit-form');
+    if (submitForm) {
+        submitForm.addEventListener('submit', async function(e) {
+            e.preventDefault(); // Prevent default form submission
+            
+            const formData = new FormData(this);
+            const packageData = {
+                name: formData.get('name'),
+                url: formData.get('url'),
+                description: formData.get('description'),
+                author: formData.get('author'),
+                license: formData.get('license') || null
+            };
+            
+            // Validate required fields
+            if (!packageData.name || !packageData.url || !packageData.description || !packageData.author) {
+                alert('Please fill in all required fields');
+                return;
+            }
+            
+            // Get submit button and store original text
+            const submitButton = this.querySelector('button[type="submit"]');
+            const originalText = submitButton.innerHTML;
+            
+            try {
+                // Disable submit button and show loading state
+                submitButton.disabled = true;
+                submitButton.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Submitting...';
+                
+                const result = await window.PackageChecker.submitPackage(packageData);
+                
+                // Show success message and redirect
+                alert('Package submitted successfully! Build process has been started.');
+                window.location.href = '/packages';
+                
+            } catch (error) {
+                console.error('Error submitting package:', error);
+                alert('Error submitting package. Please try again.');
+                
+                // Re-enable submit button
+                submitButton.disabled = false;
+                submitButton.innerHTML = originalText;
+            }
+        });
+    }
 });
 
 // API helper functions
