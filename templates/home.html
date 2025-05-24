@@ -1,0 +1,98 @@
+<div class="bg-gradient-to-r from-zig-orange to-zig-purple text-white py-16">
+    <div class="container mx-auto px-4 text-center">
+        <h1 class="text-5xl font-bold mb-4 flex items-center justify-center gap-4">
+            <i class="fas fa-cube"></i>
+            Zig Package Checker
+        </h1>
+        <p class="text-xl mb-8 opacity-90 max-w-2xl mx-auto">
+            Automated compatibility testing for Zig packages across multiple Zig versions
+        </p>
+        <div class="flex justify-center gap-8 mb-8">
+            <div class="text-center">
+                <div class="text-3xl font-bold">0</div>
+                <div class="text-sm opacity-80">Packages Tracked</div>
+            </div>
+            <div class="text-center">
+                <div class="text-3xl font-bold">4</div>
+                <div class="text-sm opacity-80">Zig Versions</div>
+            </div>
+            <div class="text-center">
+                <div class="text-3xl font-bold">100%</div>
+                <div class="text-sm opacity-80">Success Rate</div>
+            </div>
+        </div>
+        <div class="flex justify-center gap-4 flex-wrap">
+            <a href="/packages" class="bg-white text-zig-orange px-6 py-3 rounded-lg font-semibold hover:bg-gray-100 transition">Browse Packages</a>
+            <a href="/api/health" class="border-2 border-white text-white px-6 py-3 rounded-lg font-semibold hover:bg-white hover:text-zig-orange transition">Check API</a>
+        </div>
+    </div>
+</div>
+
+<section class="py-16 bg-white">
+    <div class="container mx-auto px-4">
+        <h2 class="text-4xl font-bold text-center mb-12 text-gray-800">Features</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            <div class="bg-white p-6 rounded-lg shadow-lg hover:shadow-xl transition text-center">
+                <div class="text-4xl text-zig-orange mb-4">
+                    <i class="fas fa-cogs"></i>
+                </div>
+                <h3 class="text-xl font-bold mb-2">Multi-Version Testing</h3>
+                <p class="text-gray-600">Automatically test packages against master, stable, and 2 previous Zig versions</p>
+            </div>
+            <div class="bg-white p-6 rounded-lg shadow-lg hover:shadow-xl transition text-center">
+                <div class="text-4xl text-zig-orange mb-4">
+                    <i class="fas fa-robot"></i>
+                </div>
+                <h3 class="text-xl font-bold mb-2">Auto-Moderation</h3>
+                <p class="text-gray-600">Intelligent filtering and validation of submitted packages</p>
+            </div>
+            <div class="bg-white p-6 rounded-lg shadow-lg hover:shadow-xl transition text-center">
+                <div class="text-4xl text-zig-orange mb-4">
+                    <i class="fas fa-search"></i>
+                </div>
+                <h3 class="text-xl font-bold mb-2">Package Discovery</h3>
+                <p class="text-gray-600">Find compatible packages from multiple sources</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="recent-activity">
+    <div class="container">
+        <h2 class="section-title">Recent Activity</h2>
+        <div class="activity-grid">
+            <div class="activity-card">
+                <h3>Latest Packages</h3>
+                <ul class="activity-list">
+                    {{#each recent_packages}}
+                    <li class="activity-item">
+                        <a href="/packages/{{name}}" class="activity-link">
+                            <span class="activity-name">{{name}}</span>
+                            <span class="activity-meta">by {{author}} • {{created_at}}</span>
+                        </a>
+                    </li>
+                    {{/each}}
+                </ul>
+                <a href="/packages" class="view-all">View all packages →</a>
+            </div>
+            <div class="activity-card">
+                <h3>Build Results</h3>
+                <ul class="activity-list">
+                    {{#each recent_builds}}
+                    <li class="activity-item">
+                        <div class="build-result">
+                            <span class="build-package">{{package_name}}</span>
+                            <span class="build-version">{{zig_version}}</span>
+                            <span class="build-status status-{{build_status}}">
+                                <i class="fas fa-{{#if (eq build_status 'success')}}check{{else}}times{{/if}}"></i>
+                                {{build_status}}
+                            </span>
+                        </div>
+                    </li>
+                    {{/each}}
+                </ul>
+                <a href="/builds" class="view-all">View all builds →</a>
+            </div>
+        </div>
+    </div>
+</section> 

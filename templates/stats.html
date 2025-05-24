@@ -1,0 +1,153 @@
+<div class="bg-gradient-to-r from-purple-600 to-indigo-600 text-white py-16 text-center">
+    <div class="container mx-auto px-4">
+        <h1 class="text-4xl font-bold mb-4 flex items-center justify-center gap-4">
+            <i class="fas fa-chart-bar"></i>
+            Statistics
+        </h1>
+        <p class="text-lg opacity-80">Insights into the Zig package ecosystem and compatibility trends</p>
+    </div>
+</div>
+
+<div class="container mx-auto px-4 py-16">
+    <!-- Overview Stats -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+        <div class="bg-white p-6 rounded-lg shadow-lg text-center">
+            <div class="text-3xl font-bold text-zig-orange mb-2">0</div>
+            <div class="text-gray-600">Total Packages</div>
+        </div>
+        <div class="bg-white p-6 rounded-lg shadow-lg text-center">
+            <div class="text-3xl font-bold text-green-600 mb-2">0</div>
+            <div class="text-gray-600">Successful Builds</div>
+        </div>
+        <div class="bg-white p-6 rounded-lg shadow-lg text-center">
+            <div class="text-3xl font-bold text-red-600 mb-2">0</div>
+            <div class="text-gray-600">Failed Builds</div>
+        </div>
+        <div class="bg-white p-6 rounded-lg shadow-lg text-center">
+            <div class="text-3xl font-bold text-blue-600 mb-2">4</div>
+            <div class="text-gray-600">Zig Versions</div>
+        </div>
+    </div>
+
+    <!-- Compatibility Matrix -->
+    <div class="bg-white p-6 rounded-lg shadow-lg mb-12">
+        <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+            <i class="fas fa-table text-zig-orange"></i>
+            Compatibility Matrix
+        </h2>
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead>
+                    <tr class="border-b">
+                        <th class="text-left py-3 px-4">Zig Version</th>
+                        <th class="text-center py-3 px-4">Packages Tested</th>
+                        <th class="text-center py-3 px-4">Success Rate</th>
+                        <th class="text-center py-3 px-4">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="border-b hover:bg-gray-50">
+                        <td class="py-3 px-4 font-medium">Master</td>
+                        <td class="text-center py-3 px-4">0</td>
+                        <td class="text-center py-3 px-4">
+                            <span class="text-gray-500">N/A</span>
+                        </td>
+                        <td class="text-center py-3 px-4">
+                            <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">Latest</span>
+                        </td>
+                    </tr>
+                    <tr class="border-b hover:bg-gray-50">
+                        <td class="py-3 px-4 font-medium">0.14.0</td>
+                        <td class="text-center py-3 px-4">0</td>
+                        <td class="text-center py-3 px-4">
+                            <span class="text-gray-500">N/A</span>
+                        </td>
+                        <td class="text-center py-3 px-4">
+                            <span class="px-2 py-1 bg-green-100 text-green-800 rounded-full text-sm">Stable</span>
+                        </td>
+                    </tr>
+                    <tr class="border-b hover:bg-gray-50">
+                        <td class="py-3 px-4 font-medium">0.13.0</td>
+                        <td class="text-center py-3 px-4">0</td>
+                        <td class="text-center py-3 px-4">
+                            <span class="text-gray-500">N/A</span>
+                        </td>
+                        <td class="text-center py-3 px-4">
+                            <span class="px-2 py-1 bg-gray-100 text-gray-800 rounded-full text-sm">Previous</span>
+                        </td>
+                    </tr>
+                    <tr class="hover:bg-gray-50">
+                        <td class="py-3 px-4 font-medium">0.12.0</td>
+                        <td class="text-center py-3 px-4">0</td>
+                        <td class="text-center py-3 px-4">
+                            <span class="text-gray-500">N/A</span>
+                        </td>
+                        <td class="text-center py-3 px-4">
+                            <span class="px-2 py-1 bg-gray-100 text-gray-800 rounded-full text-sm">Legacy</span>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Charts Section -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+        <!-- Build Success Trends -->
+        <div class="bg-white p-6 rounded-lg shadow-lg">
+            <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <i class="fas fa-chart-line text-green-600"></i>
+                Build Success Trends
+            </h3>
+            <div class="h-64 flex items-center justify-center text-gray-500">
+                <div class="text-center">
+                    <i class="fas fa-chart-line text-4xl mb-4 opacity-30"></i>
+                    <p>Chart will appear when data is available</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Package Growth -->
+        <div class="bg-white p-6 rounded-lg shadow-lg">
+            <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <i class="fas fa-chart-area text-blue-600"></i>
+                Package Growth
+            </h3>
+            <div class="h-64 flex items-center justify-center text-gray-500">
+                <div class="text-center">
+                    <i class="fas fa-chart-area text-4xl mb-4 opacity-30"></i>
+                    <p>Chart will appear when data is available</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Top Packages -->
+    <div class="bg-white p-6 rounded-lg shadow-lg mb-12">
+        <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+            <i class="fas fa-trophy text-yellow-500"></i>
+            Most Compatible Packages
+        </h2>
+        <div class="text-center text-gray-500 py-12">
+            <i class="fas fa-box-open text-6xl mb-4 opacity-30"></i>
+            <h3 class="text-xl font-semibold mb-2">No packages yet</h3>
+            <p class="mb-4">Submit some packages to see compatibility rankings</p>
+            <a href="/submit" class="bg-zig-orange text-white px-6 py-3 rounded-lg hover:bg-orange-600 transition">
+                Submit Package
+            </a>
+        </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="bg-white p-6 rounded-lg shadow-lg">
+        <h2 class="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+            <i class="fas fa-history text-purple-600"></i>
+            Recent Build Activity
+        </h2>
+        <div class="text-center text-gray-500 py-12">
+            <i class="fas fa-clock text-6xl mb-4 opacity-30"></i>
+            <h3 class="text-xl font-semibold mb-2">No recent activity</h3>
+            <p>Build activity will appear here when packages are submitted</p>
+        </div>
+    </div>
+</div> 

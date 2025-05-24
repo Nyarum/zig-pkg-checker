@@ -1,0 +1,124 @@
+<div class="bg-gray-900 text-white py-16 text-center">
+    <div class="container mx-auto px-4">
+        <h1 class="text-4xl font-bold mb-4 flex items-center justify-center gap-4">
+            <i class="fas fa-boxes"></i>
+            Package Directory
+        </h1>
+        <p class="text-lg opacity-80">Browse and discover Zig packages with compatibility information</p>
+    </div>
+</div>
+
+<div class="container mx-auto px-4 py-16">
+    <div class="text-center">
+        <i class="fas fa-box-open text-6xl text-gray-400 mb-6"></i>
+        <h3 class="text-2xl font-bold text-gray-800 mb-2">No packages yet</h3>
+        <p class="text-gray-600 mb-6">Be the first to submit a package for testing!</p>
+        <a href="/api/packages" class="bg-zig-orange text-white px-6 py-3 rounded-lg font-semibold hover:bg-orange-600 transition">View API</a>
+    </div>
+</div>
+
+<div class="container">
+    <div class="packages-toolbar">
+        <div class="search-box">
+            <input type="text" id="package-search" placeholder="Search packages..." class="search-input">
+            <i class="fas fa-search search-icon"></i>
+        </div>
+        <div class="filters">
+            <select id="version-filter" class="filter-select">
+                <option value="">All Zig Versions</option>
+                <option value="master">Master</option>
+                <option value="0.14.0">0.14.0 (Stable)</option>
+                <option value="0.13.0">0.13.0</option>
+                <option value="0.12.0">0.12.0</option>
+            </select>
+            <select id="status-filter" class="filter-select">
+                <option value="">All Statuses</option>
+                <option value="success">✅ Working</option>
+                <option value="failed">❌ Failing</option>
+                <option value="pending">⏳ Pending</option>
+            </select>
+            <select id="sort-filter" class="filter-select">
+                <option value="name">Sort by Name</option>
+                <option value="updated">Recently Updated</option>
+                <option value="popularity">Popularity</option>
+                <option value="compatibility">Compatibility</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="packages-grid" id="packages-grid">
+        {{#each packages}}
+        <div class="package-card" data-name="{{name}}" data-author="{{author}}">
+            <div class="package-header">
+                <h3 class="package-name">
+                    <a href="/packages/{{name}}">{{name}}</a>
+                </h3>
+                <div class="package-meta">
+                    <span class="package-author">
+                        <i class="fas fa-user"></i>
+                        {{author}}
+                    </span>
+                    <span class="package-updated">
+                        <i class="fas fa-clock"></i>
+                        {{last_updated}}
+                    </span>
+                </div>
+            </div>
+            
+            <div class="package-description">
+                {{description}}
+            </div>
+
+            <div class="package-compatibility">
+                <h4>Compatibility Matrix</h4>
+                <div class="compatibility-grid">
+                    {{#each build_results}}
+                    <div class="compat-item">
+                        <span class="zig-version">{{zig_version}}</span>
+                        <span class="build-status status-{{build_status}}">
+                            {{#if (eq build_status 'success')}}
+                                <i class="fas fa-check"></i>
+                            {{else if (eq build_status 'failed')}}
+                                <i class="fas fa-times"></i>
+                            {{else}}
+                                <i class="fas fa-clock"></i>
+                            {{/if}}
+                        </span>
+                    </div>
+                    {{/each}}
+                </div>
+            </div>
+
+            <div class="package-actions">
+                <a href="{{url}}" class="btn btn-sm btn-outline" target="_blank">
+                    <i class="fas fa-external-link-alt"></i>
+                    Repository
+                </a>
+                <a href="/packages/{{name}}" class="btn btn-sm btn-primary">
+                    View Details
+                </a>
+            </div>
+
+            {{#if license}}
+            <div class="package-license">
+                <i class="fas fa-balance-scale"></i>
+                {{license}}
+            </div>
+            {{/if}}
+        </div>
+        {{/each}}
+    </div>
+
+    {{#unless packages}}
+    <div class="empty-state">
+        <i class="fas fa-box-open"></i>
+        <h3>No packages found</h3>
+        <p>No packages match your current filters. Try adjusting your search criteria.</p>
+        <a href="/submit" class="btn btn-primary">Submit a Package</a>
+    </div>
+    {{/unless}}
+
+    <div class="pagination" id="pagination">
+        <!-- Pagination will be populated by JavaScript -->
+    </div>
+</div> 

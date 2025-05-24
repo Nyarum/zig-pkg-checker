@@ -1,0 +1,97 @@
+# Cursor Rules for zigtgshka Project
+
+## Core Development Principles
+
+### KISS (Keep It Simple, Stupid)
+- Write simple, readable code that does one thing well
+- Avoid over-engineering and unnecessary complexity
+- Prefer straightforward solutions over clever ones
+- Break complex problems into smaller, manageable pieces
+- Use clear, descriptive variable and function names
+
+### DRY (Don't Repeat Yourself)
+- Extract common functionality into reusable functions or modules
+- Use constants for repeated values
+- Create helper functions for repetitive operations
+- Consider creating utility modules for shared code
+- Avoid duplicating logic across different parts of the codebase
+
+## Code Preservation Rules
+
+### Debug Logs Protection
+- **NEVER remove, comment out, or modify existing debug logs** that the user has added
+- Preserve all `std.debug.print()` statements exactly as written
+- When adding new functionality, you may add your own debug logs, but keep user's logs intact
+- If code refactoring affects debug logs, ensure they remain functional and in their original locations
+
+## Documentation Search Requirements
+
+### Mandatory Documentation Search
+- **ALWAYS use search tools** to find relevant documentation before making suggestions or code changes
+- Search in these documentation locations:
+  - `libs/zig/lib/std` - Contains Zig standard library source codes
+  - `libs/zzz` - Contains http framework source codes
+  - `libs/zig-sqlite` - Contains sqlite3 source codes
+
+### Search Strategy
+1. First search for the specific function, method, or concept you're working with
+2. Look for examples and best practices in the documentation
+3. Check for any specific patterns or conventions used in this project
+4. Reference the documentation when explaining code suggestions
+
+## Zig Language Specific Rules
+
+### Memory Management
+- Use the allocator pattern consistently
+- Always pair `init()` with `deinit()` calls
+- Free allocated memory using the same allocator that allocated it
+- Handle `deinit()` in error cases appropriately
+
+### Error Handling
+- Use Zig's error union types properly
+- Handle errors explicitly, don't ignore them
+- Use appropriate error types from the `BotError` enum when applicable
+- Prefer returning errors over panicking
+
+### JSON Handling
+- Use `std.json.parseFromSlice()` for parsing JSON responses
+- Always call `deinit()` on parsed JSON objects
+- Handle `ignore_unknown_fields = true` option when needed
+- Make deep copies of strings and nested structures when needed
+
+### HTTP Requests
+- Follow the existing pattern in `makeRequest()` function
+- Use proper header setting for API requests
+- Handle request/response lifecycle properly with `defer req.deinit()`
+
+## Project Structure Respect
+
+### File Organization
+- Keep related functionality in appropriate modules
+
+### API Design
+- Follow the existing patterns for Bot methods
+- Keep the API simple and consistent
+- Use the established error handling patterns
+- Maintain compatibility with existing code
+
+## Testing and Examples
+
+### When Adding New Features
+- Look for similar patterns in the `examples/` directory
+- Follow existing conventions for parameter handling
+- Test with the existing Bot structure and methods
+- Ensure new code integrates well with existing error handling
+
+## Code Review Checklist
+
+Before suggesting any changes, ensure:
+1. [ ] Documentation has been searched for relevant information
+3. [ ] KISS principle is followed - solution is as simple as possible
+4. [ ] DRY principle is applied - no unnecessary code duplication
+5. [ ] All existing debug logs are preserved
+6. [ ] Memory management follows Zig patterns
+7. [ ] Error handling is explicit and appropriate
+8. [ ] Code follows existing project conventions
+
+Remember: The goal is to maintain and extend this Telegram bot library while keeping it simple, maintainable, and well-documented. 

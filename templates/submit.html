@@ -1,0 +1,146 @@
+<div class="bg-gradient-to-r from-green-600 to-blue-600 text-white py-16 text-center">
+    <div class="container mx-auto px-4">
+        <h1 class="text-4xl font-bold mb-4 flex items-center justify-center gap-4">
+            <i class="fas fa-plus-circle"></i>
+            Submit Package
+        </h1>
+        <p class="text-lg opacity-80">Add your Zig package for compatibility testing across multiple versions</p>
+    </div>
+</div>
+
+<div class="container mx-auto px-4 py-16">
+    <div class="max-w-2xl mx-auto">
+        <form id="submit-form" class="bg-white p-8 rounded-lg shadow-lg">
+            <div class="mb-6">
+                <label for="package-name" class="block text-sm font-bold text-gray-700 mb-2">
+                    Package Name *
+                </label>
+                <input 
+                    type="text" 
+                    id="package-name" 
+                    name="name" 
+                    required
+                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zig-orange"
+                    placeholder="my-awesome-package"
+                >
+            </div>
+
+            <div class="mb-6">
+                <label for="package-url" class="block text-sm font-bold text-gray-700 mb-2">
+                    Repository URL *
+                </label>
+                <input 
+                    type="url" 
+                    id="package-url" 
+                    name="url" 
+                    required
+                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zig-orange"
+                    placeholder="https://github.com/username/repo"
+                >
+            </div>
+
+            <div class="mb-6">
+                <label for="package-description" class="block text-sm font-bold text-gray-700 mb-2">
+                    Description *
+                </label>
+                <textarea 
+                    id="package-description" 
+                    name="description" 
+                    required
+                    rows="3"
+                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zig-orange"
+                    placeholder="A brief description of what your package does..."
+                ></textarea>
+            </div>
+
+            <div class="mb-6">
+                <label for="package-author" class="block text-sm font-bold text-gray-700 mb-2">
+                    Author *
+                </label>
+                <input 
+                    type="text" 
+                    id="package-author" 
+                    name="author" 
+                    required
+                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zig-orange"
+                    placeholder="Your name or username"
+                >
+            </div>
+
+            <div class="mb-6">
+                <label for="package-license" class="block text-sm font-bold text-gray-700 mb-2">
+                    License
+                </label>
+                <select 
+                    id="package-license" 
+                    name="license"
+                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zig-orange"
+                >
+                    <option value="">Select a license</option>
+                    <option value="MIT">MIT</option>
+                    <option value="Apache-2.0">Apache 2.0</option>
+                    <option value="GPL-3.0">GPL 3.0</option>
+                    <option value="BSD-3-Clause">BSD 3-Clause</option>
+                    <option value="LGPL-3.0">LGPL 3.0</option>
+                    <option value="Other">Other</option>
+                </select>
+            </div>
+
+            <div class="mb-6">
+                <div class="flex items-start">
+                    <input 
+                        type="checkbox" 
+                        id="agree-terms" 
+                        required
+                        class="mt-1 mr-2"
+                    >
+                    <label for="agree-terms" class="text-sm text-gray-600">
+                        I confirm that this package is publicly available and I have the right to submit it for testing. 
+                        I understand that build results will be publicly visible.
+                    </label>
+                </div>
+            </div>
+
+            <div class="flex gap-4">
+                <button 
+                    type="submit" 
+                    class="flex-1 bg-zig-orange text-white py-3 px-6 rounded-lg font-semibold hover:bg-orange-600 transition"
+                >
+                    <i class="fas fa-rocket mr-2"></i>
+                    Submit Package
+                </button>
+                <button 
+                    type="reset" 
+                    class="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
+                >
+                    Reset Form
+                </button>
+            </div>
+        </form>
+
+        <div class="mt-8 bg-blue-50 p-6 rounded-lg">
+            <h3 class="text-lg font-bold text-blue-800 mb-3">
+                <i class="fas fa-info-circle mr-2"></i>
+                What happens next?
+            </h3>
+            <ul class="text-blue-700 space-y-2">
+                <li class="flex items-start">
+                    <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
+                    Your package will be queued for testing across multiple Zig versions
+                </li>
+                <li class="flex items-start">
+                    <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
+                    Build results will be available within a few minutes
+                </li>
+                <li class="flex items-start">
+                    <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
+                    You'll be able to track compatibility over time
+                </li>
+                <li class="flex items-start">
+                    <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
+                    Other developers can discover your package
+                </li>
+            </ul>
+        </div>
+    </div>
+</div> 

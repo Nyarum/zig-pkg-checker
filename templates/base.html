@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{title}} - Zig Package Checker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'zig-orange': '#f7a41d',
+                        'zig-purple': '#6b4db7',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body>
+    <header class="bg-white shadow-md sticky top-0 z-50">
+        <nav class="py-4">
+            <div class="container mx-auto px-4 flex justify-between items-center">
+                <div class="nav-brand">
+                    <a href="/" class="flex items-center gap-2 text-zig-orange font-bold text-xl">
+                        <i class="fas fa-cube"></i>
+                        <span>Zig Package Checker</span>
+                    </a>
+                </div>
+                <ul class="hidden md:flex items-center space-x-8">
+                    <li><a href="/" class="text-gray-700 hover:text-zig-orange transition font-medium">Home</a></li>
+                    <li><a href="/packages" class="text-gray-700 hover:text-zig-orange transition font-medium">Packages</a></li>
+                    <li><a href="/submit" class="text-gray-700 hover:text-zig-orange transition font-medium">Submit</a></li>
+                    <li><a href="/stats" class="text-gray-700 hover:text-zig-orange transition font-medium">Stats</a></li>
+                    <li><a href="/api" class="text-gray-700 hover:text-zig-orange transition font-medium">API</a></li>
+                </ul>
+                <div class="md:hidden">
+                    <span class="text-2xl cursor-pointer" onclick="toggleMobileMenu()">☰</span>
+                </div>
+            </div>
+            <!-- Mobile Menu -->
+            <div class="md:hidden bg-white shadow-lg" id="mobile-menu" style="display: none;">
+                <a href="/" class="block px-4 py-2 text-gray-700 hover:bg-gray-100 border-b">Home</a>
+                <a href="/packages" class="block px-4 py-2 text-gray-700 hover:bg-gray-100 border-b">Packages</a>
+                <a href="/submit" class="block px-4 py-2 text-gray-700 hover:bg-gray-100 border-b">Submit</a>
+                <a href="/stats" class="block px-4 py-2 text-gray-700 hover:bg-gray-100 border-b">Stats</a>
+                <a href="/api" class="block px-4 py-2 text-gray-700 hover:bg-gray-100">API</a>
+            </div>
+        </nav>
+    </header>
+
+    <main class="min-h-screen bg-gray-50">
+        {{content}}
+    </main>
+
+    <footer class="bg-gray-900 text-white py-12">
+        <div class="container mx-auto px-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
+                <div>
+                    <h3 class="text-zig-orange font-bold text-lg mb-4">Zig Package Checker</h3>
+                    <p class="text-gray-300">Automated compatibility testing for Zig packages across multiple versions.</p>
+                </div>
+                <div>
+                    <h3 class="text-zig-orange font-bold text-lg mb-4">Links</h3>
+                    <ul class="space-y-2">
+                        <li><a href="https://github.com/ziglang/zig" class="text-gray-300 hover:text-zig-orange transition">Zig Language</a></li>
+                        <li><a href="https://github.com" class="text-gray-300 hover:text-zig-orange transition">GitHub</a></li>
+                        <li><a href="/api" class="text-gray-300 hover:text-zig-orange transition">API Documentation</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="text-zig-orange font-bold text-lg mb-4">Status</h3>
+                    <p class="flex items-center gap-2">
+                        <i class="fas fa-circle text-green-500"></i>
+                        <span class="text-gray-300">All systems operational</span>
+                    </p>
+                </div>
+            </div>
+            <div class="text-center pt-8 border-t border-gray-700">
+                <p class="text-gray-400">&copy; 2024 Zig Package Checker. Built with Zig and zzz.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html> 
