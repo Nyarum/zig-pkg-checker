@@ -7,3 +7,4 @@ libs/*
 zig_pkg_checker.db
 DEPLOYMENT.md
 *.sh
+*.db
