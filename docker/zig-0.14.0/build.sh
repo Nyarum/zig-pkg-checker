@@ -37,17 +37,6 @@ if [ -z "$REPO_URL" ]; then
     exit 1
 fi
 
-# Debug: Show all relevant environment variables
-echo "=== DEBUG: Build Environment Variables ==="
-echo "REPO_URL: $REPO_URL"
-echo "PACKAGE_NAME: $PACKAGE_NAME"
-echo "BUILD_ID: $BUILD_ID"
-echo "RESULT_FILE: $RESULT_FILE"
-echo "ZIG_NO_LIB_DIR_CHECK: $ZIG_NO_LIB_DIR_CHECK"
-echo "ZIG_GLOBAL_CACHE_DIR: $ZIG_GLOBAL_CACHE_DIR"
-echo "NO_COLOR: $NO_COLOR"
-echo "==============================================="
-
 # Initialize result object
 ZIG_VERSION=$(zig version)
 START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -55,16 +44,6 @@ START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 echo "Build started for $PACKAGE_NAME (ID: $BUILD_ID)"
 echo "Zig version: $ZIG_VERSION"
 echo "Repository: $REPO_URL"
-
-# Debug: Show zig installation details
-echo "=== DEBUG: Zig Installation Details ==="
-echo "Zig executable path: $(which zig)"
-echo "Zig version details: $(zig version)"
-echo "Zig env info:"
-zig env 2>&1 || echo "zig env command failed"
-echo "Zig cache directory:"
-ls -la "$ZIG_GLOBAL_CACHE_DIR" 2>/dev/null || echo "Cache directory not yet created"
-echo "==========================================="
 
 # Create result JSON structure
 cat > "$RESULT_FILE" << EOF
@@ -108,14 +87,10 @@ EOF
 
 # Cleanup function
 cleanup() {
-    echo "=== DEBUG: Cleanup function called ==="
-    echo "Current directory: $(pwd)"
-    echo "Workspace contents before cleanup:"
     ls -la /workspace/ 2>/dev/null || echo "No workspace directory"
     echo "Cleaning up..."
     cd /
     rm -rf /workspace/*
-    echo "=== DEBUG: Cleanup completed ==="
 }
 
 trap cleanup EXIT
@@ -124,18 +99,9 @@ BUILD_LOG=""
 ERROR_LOG=""
 
 try_build() {
-    echo "=== DEBUG: Starting build process ==="
-    echo "Current directory: $(pwd)"
-    echo "Directory contents:"
     ls -la
     
     echo "Cloning repository..."
-    
-    # Debug: Show git configuration
-    echo "=== DEBUG: Git Configuration ==="
-    git --version
-    git config --list || echo "No git config found"
-    echo "=============================="
     
     # Clone the repository with timeout
     echo "=== DEBUG: Starting git clone ==="
@@ -164,13 +130,6 @@ try_build() {
         echo "============================="
         return 1
     fi
-    
-    # Debug: Examine build.zig content
-    echo "=== DEBUG: Examining build.zig ==="
-    echo "build.zig size: $(wc -l build.zig)"
-    echo "First 20 lines of build.zig:"
-    head -20 build.zig
-    echo "==============================="
     
     # Debug: Check for zig.zon file
     if [ -f "build.zig.zon" ]; then
@@ -239,6 +198,8 @@ try_build() {
             fi
         fi
     fi
+
+    echo $BUILD_SUCCESS
     
     if [ "$BUILD_SUCCESS" = false ]; then
         BUILD_EXIT_CODE=1
@@ -247,15 +208,6 @@ try_build() {
         BUILD_EXIT_CODE=0
         BUILD_LOG=$(cat build.log 2>/dev/null || echo "Build successful")
     fi
-    
-    # Debug: Pre-build state
-    echo "=== DEBUG: Pre-build State ==="
-    echo "Current directory: $(pwd)"
-    echo "Available targets:"
-    timeout 30s zig build --help 2>&1 | grep -A 20 "Steps:" || echo "Could not get build targets"
-    echo "Cache state:"
-    ls -la "$ZIG_GLOBAL_CACHE_DIR" 2>/dev/null || echo "Cache directory doesn't exist yet"
-    echo "=========================="
 
     
     # Enhanced error detection: Check both exit code and build log content

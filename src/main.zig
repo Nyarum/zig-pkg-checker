@@ -1277,7 +1277,7 @@ pub fn main() !void {
     }
 
     const host = "127.0.0.1";
-    const port = 3000;
+    const port = 3001;
 
     // Create static directory for serving files
     const static_dir = Dir.from_std(try std.fs.cwd().openDir("static", .{}));
