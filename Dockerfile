@@ -58,19 +58,24 @@ RUN apk add --no-cache \
     procps \
     coreutils
 
-# Create app user for security
+# Create app user for security and add to docker group
 RUN addgroup -g 1001 -S appgroup && \
-    adduser -u 1001 -S appuser -G appgroup
+    adduser -u 1001 -S appuser -G appgroup && \
+    adduser appuser docker
 
 # Create necessary directories
-RUN mkdir -p /app/templates /app/static /app/docker /tmp/build_results && \
+RUN mkdir -p /app/templates /app/static /app/docker /app/data /tmp/build_results && \
     chown -R appuser:appgroup /app /tmp/build_results
 
 # Copy built application from builder stage
-COPY --from=builder /app/zig-out/bin/zig-pkg-checker /app/
+COPY --from=builder /app/zig-out/bin/zig_pkg_checker /app/
 COPY --chown=appuser:appgroup templates/ /app/templates/
 COPY --chown=appuser:appgroup static/ /app/static/
 COPY --chown=appuser:appgroup docker/ /app/docker/
+
+# Set correct permissions for the binary
+RUN chown appuser:appgroup /app/zig_pkg_checker && \
+    chmod +x /app/zig_pkg_checker
 
 # Set working directory
 WORKDIR /app
@@ -86,4 +91,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3001/api/health || exit 1
 
 # Run the application
-CMD ["./zig-pkg-checker"] 
+CMD ["./zig_pkg_checker"] 
