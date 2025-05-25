@@ -54,9 +54,80 @@ const PackageTemplateData = struct {
     };
 };
 
+// Home page statistics data structure
+const HomeStatsData = struct {
+    title: []const u8,
+    total_packages: i32,
+    zig_versions: i32,
+    success_rate: []const u8,
+    recent_packages: []RecentPackage,
+    recent_builds: []RecentBuild,
+
+    const RecentPackage = struct {
+        name: []const u8,
+        author: []const u8,
+        created_at: []const u8,
+    };
+
+    const RecentBuild = struct {
+        package_name: []const u8,
+        zig_version: []const u8,
+        build_status: []const u8,
+    };
+};
+
+// Statistics page data structure
+const StatsPageData = struct {
+    title: []const u8,
+    total_packages: i32,
+    successful_builds: i32,
+    failed_builds: i32,
+    zig_versions: i32,
+    compatibility_matrix: []CompatibilityRow,
+    top_packages: []TopPackage,
+    recent_activity: []RecentActivity,
+
+    const CompatibilityRow = struct {
+        zig_version: []const u8,
+        packages_tested: i32,
+        success_rate: []const u8,
+        status: []const u8,
+    };
+
+    const TopPackage = struct {
+        name: []const u8,
+        author: []const u8,
+        success_rate: []const u8,
+        total_builds: i32,
+    };
+
+    const RecentActivity = struct {
+        package_name: []const u8,
+        zig_version: []const u8,
+        build_status: []const u8,
+        timestamp: []const u8,
+    };
+};
+
 // Template rendering helpers
 fn renderTemplate(ctx: *const Context, template_name: []const u8) !Respond {
-    return renderTemplateWithData(ctx, template_name, struct {}{});
+    return renderTemplateWithTitle(ctx, template_name, getPageTitle(template_name));
+}
+
+fn renderTemplateWithTitle(ctx: *const Context, template_name: []const u8, title: []const u8) !Respond {
+    const data = struct {
+        title: []const u8,
+    }{ .title = title };
+    return renderTemplateWithData(ctx, template_name, data);
+}
+
+fn getPageTitle(template_name: []const u8) []const u8 {
+    if (std.mem.eql(u8, template_name, "home.html")) return "Home";
+    if (std.mem.eql(u8, template_name, "packages.html")) return "Packages";
+    if (std.mem.eql(u8, template_name, "submit.html")) return "Submit Package";
+    if (std.mem.eql(u8, template_name, "stats.html")) return "Statistics";
+    if (std.mem.eql(u8, template_name, "api.html")) return "API Documentation";
+    return "Zig Package Checker";
 }
 
 fn renderTemplateWithData(ctx: *const Context, template_name: []const u8, data: anytype) !Respond {
@@ -108,50 +179,43 @@ fn renderTemplateWithData(ctx: *const Context, template_name: []const u8, data: 
 
     log.debug("renderTemplateWithData: Template rendered successfully, content length: {}", .{rendered_content.len});
 
-    // Find the placeholder in base template
-    const placeholder = "{{content}}";
-    const placeholder_index = std.mem.indexOf(u8, base_template, placeholder) orelse {
-        log.err("Template placeholder not found", .{});
+    // Create data structure for base template that includes both title and content
+    const base_data = struct {
+        title: []const u8,
+        content: []const u8,
+    }{
+        .title = if (@hasField(@TypeOf(data), "title")) data.title else getPageTitle(template_name),
+        .content = rendered_content,
+    };
+
+    // Render the base template with the combined data
+    const final_rendered = engine.renderTemplate(base_template, base_data) catch |err| {
+        log.err("Failed to render base template: {}", .{err});
         return ctx.response.apply(.{
             .status = .@"Internal Server Error",
             .mime = http.Mime.TEXT,
-            .body = "Template placeholder error",
+            .body = "Base template rendering error",
         });
     };
-
-    // Calculate size needed
-    const before_placeholder = base_template[0..placeholder_index];
-    const after_placeholder = base_template[placeholder_index + placeholder.len ..];
-    const total_size = before_placeholder.len + rendered_content.len + after_placeholder.len;
-
-    // Allocate buffer for the result using the context's arena allocator
-    const rendered = ctx.allocator.alloc(u8, total_size) catch |err| {
-        log.err("Failed to allocate template buffer: {}", .{err});
-        return ctx.response.apply(.{
-            .status = .@"Internal Server Error",
-            .mime = http.Mime.TEXT,
-            .body = "Template allocation error",
-        });
-    };
-
-    // Copy parts manually
-    var pos: usize = 0;
-    @memcpy(rendered[pos .. pos + before_placeholder.len], before_placeholder);
-    pos += before_placeholder.len;
-    @memcpy(rendered[pos .. pos + rendered_content.len], rendered_content);
-    pos += rendered_content.len;
-    @memcpy(rendered[pos .. pos + after_placeholder.len], after_placeholder);
 
     return ctx.response.apply(.{
         .status = .OK,
         .mime = http.Mime.HTML,
-        .body = rendered,
+        .body = final_rendered,
     });
 }
 
 // Route handlers
 fn home_handler(ctx: *const Context, _: void) !Respond {
-    return renderTemplate(ctx, "home.html");
+    // Fetch home page statistics
+    const home_data = fetchHomeStatsData(ctx.allocator) catch |err| {
+        log.err("Failed to fetch home stats data: {}", .{err});
+        // Return template with basic title on error
+        return renderTemplateWithTitle(ctx, "home.html", "Home");
+    };
+    defer freeHomeStatsData(ctx.allocator, home_data);
+
+    return renderTemplateWithData(ctx, "home.html", home_data);
 }
 
 fn packages_handler(ctx: *const Context, _: void) !Respond {
@@ -426,7 +490,15 @@ fn urlDecode(alloc: Allocator, encoded: []const u8) ?[]const u8 {
 }
 
 fn stats_handler(ctx: *const Context, _: void) !Respond {
-    return renderTemplate(ctx, "stats.html");
+    // Fetch statistics page data
+    const stats_data = fetchStatsPageData(ctx.allocator) catch |err| {
+        log.err("Failed to fetch stats page data: {}", .{err});
+        // Return template with basic title on error
+        return renderTemplateWithTitle(ctx, "stats.html", "Statistics");
+    };
+    defer freeStatsPageData(ctx.allocator, stats_data);
+
+    return renderTemplateWithData(ctx, "stats.html", stats_data);
 }
 
 fn api_docs_handler(ctx: *const Context, _: void) !Respond {
@@ -1466,6 +1538,375 @@ fn freePackagesTemplateData(alloc: Allocator, data: PackageTemplateData) void {
         alloc.free(package.build_results);
     }
     alloc.free(data.packages);
+}
+
+fn fetchHomeStatsData(alloc: Allocator) !HomeStatsData {
+    log.debug("fetchHomeStatsData: Starting to fetch home page statistics", .{});
+
+    // Get total packages count
+    const total_packages = fetchTotalPackagesCount() catch 0;
+
+    // Get success rate
+    const success_rate = calculateOverallSuccessRate(alloc) catch "N/A";
+
+    // Get recent packages
+    const recent_packages = fetchRecentPackages(alloc) catch &[_]HomeStatsData.RecentPackage{};
+
+    // Get recent builds
+    const recent_builds = fetchRecentBuilds(alloc) catch &[_]HomeStatsData.RecentBuild{};
+
+    return HomeStatsData{
+        .title = "Home",
+        .total_packages = total_packages,
+        .zig_versions = 4, // Fixed: master, 0.14.0, 0.13.0, 0.12.0
+        .success_rate = success_rate,
+        .recent_packages = recent_packages,
+        .recent_builds = recent_builds,
+    };
+}
+
+fn fetchStatsPageData(alloc: Allocator) !StatsPageData {
+    log.debug("fetchStatsPageData: Starting to fetch statistics page data", .{});
+
+    // Get basic counts
+    const total_packages = fetchTotalPackagesCount() catch 0;
+    const build_counts = fetchBuildCounts() catch .{ .successful = 0, .failed = 0 };
+
+    // Get compatibility matrix
+    const compatibility_matrix = fetchCompatibilityMatrix(alloc) catch &[_]StatsPageData.CompatibilityRow{};
+
+    // Get top packages
+    const top_packages = fetchTopPackages(alloc) catch &[_]StatsPageData.TopPackage{};
+
+    // Get recent activity
+    const recent_activity = fetchRecentActivity(alloc) catch &[_]StatsPageData.RecentActivity{};
+
+    return StatsPageData{
+        .title = "Statistics",
+        .total_packages = total_packages,
+        .successful_builds = build_counts.successful,
+        .failed_builds = build_counts.failed,
+        .zig_versions = 4,
+        .compatibility_matrix = compatibility_matrix,
+        .top_packages = top_packages,
+        .recent_activity = recent_activity,
+    };
+}
+
+fn fetchTotalPackagesCount() !i32 {
+    const CountRow = struct { count: i64 };
+    const query = "SELECT COUNT(*) as count FROM packages";
+
+    var stmt = db.prepare(struct {}, CountRow, query) catch return 0;
+    defer stmt.finalize();
+
+    stmt.bind(.{}) catch return 0;
+    defer stmt.reset();
+
+    if (stmt.step() catch null) |row| {
+        return @intCast(row.count);
+    }
+    return 0;
+}
+
+const BuildCounts = struct {
+    successful: i32,
+    failed: i32,
+};
+
+fn fetchBuildCounts() !BuildCounts {
+    const CountRow = struct {
+        successful: i64,
+        failed: i64,
+    };
+
+    const query =
+        \\SELECT 
+        \\  SUM(CASE WHEN build_status = 'success' THEN 1 ELSE 0 END) as successful,
+        \\  SUM(CASE WHEN build_status = 'failed' THEN 1 ELSE 0 END) as failed
+        \\FROM build_results
+    ;
+
+    var stmt = db.prepare(struct {}, CountRow, query) catch return BuildCounts{ .successful = 0, .failed = 0 };
+    defer stmt.finalize();
+
+    stmt.bind(.{}) catch return BuildCounts{ .successful = 0, .failed = 0 };
+    defer stmt.reset();
+
+    if (stmt.step() catch null) |row| {
+        return BuildCounts{
+            .successful = @intCast(row.successful),
+            .failed = @intCast(row.failed),
+        };
+    }
+    return BuildCounts{ .successful = 0, .failed = 0 };
+}
+
+fn calculateOverallSuccessRate(alloc: Allocator) ![]const u8 {
+    const counts = fetchBuildCounts() catch return alloc.dupe(u8, "N/A");
+    const total = counts.successful + counts.failed;
+
+    if (total == 0) {
+        return alloc.dupe(u8, "N/A");
+    }
+
+    const rate = (@as(f64, @floatFromInt(counts.successful)) / @as(f64, @floatFromInt(total))) * 100.0;
+    return std.fmt.allocPrint(alloc, "{d:.1}%", .{rate});
+}
+
+fn fetchRecentPackages(alloc: Allocator) ![]HomeStatsData.RecentPackage {
+    const PackageRow = struct {
+        name: sqlite.Text,
+        author: ?sqlite.Text,
+        created_at: sqlite.Text,
+    };
+
+    const query = "SELECT name, author, created_at FROM packages ORDER BY created_at DESC LIMIT 5";
+
+    var stmt = db.prepare(struct {}, PackageRow, query) catch return &[_]HomeStatsData.RecentPackage{};
+    defer stmt.finalize();
+
+    stmt.bind(.{}) catch return &[_]HomeStatsData.RecentPackage{};
+    defer stmt.reset();
+
+    var packages = std.ArrayList(HomeStatsData.RecentPackage).init(alloc);
+    defer packages.deinit();
+
+    while (stmt.step() catch null) |row| {
+        const package = HomeStatsData.RecentPackage{
+            .name = alloc.dupe(u8, row.name.data) catch continue,
+            .author = if (row.author) |auth| alloc.dupe(u8, auth.data) catch "Unknown" else "Unknown",
+            .created_at = alloc.dupe(u8, row.created_at.data) catch continue,
+        };
+        packages.append(package) catch continue;
+    }
+
+    return packages.toOwnedSlice() catch &[_]HomeStatsData.RecentPackage{};
+}
+
+fn fetchRecentBuilds(alloc: Allocator) ![]HomeStatsData.RecentBuild {
+    const BuildRow = struct {
+        package_name: sqlite.Text,
+        zig_version: sqlite.Text,
+        build_status: sqlite.Text,
+    };
+
+    const query =
+        \\SELECT p.name as package_name, br.zig_version, br.build_status 
+        \\FROM build_results br 
+        \\JOIN packages p ON br.package_id = p.id 
+        \\ORDER BY br.created_at DESC LIMIT 5
+    ;
+
+    var stmt = db.prepare(struct {}, BuildRow, query) catch return &[_]HomeStatsData.RecentBuild{};
+    defer stmt.finalize();
+
+    stmt.bind(.{}) catch return &[_]HomeStatsData.RecentBuild{};
+    defer stmt.reset();
+
+    var builds = std.ArrayList(HomeStatsData.RecentBuild).init(alloc);
+    defer builds.deinit();
+
+    while (stmt.step() catch null) |row| {
+        const build = HomeStatsData.RecentBuild{
+            .package_name = alloc.dupe(u8, row.package_name.data) catch continue,
+            .zig_version = alloc.dupe(u8, row.zig_version.data) catch continue,
+            .build_status = alloc.dupe(u8, row.build_status.data) catch continue,
+        };
+        builds.append(build) catch continue;
+    }
+
+    return builds.toOwnedSlice() catch &[_]HomeStatsData.RecentBuild{};
+}
+
+fn fetchCompatibilityMatrix(alloc: Allocator) ![]StatsPageData.CompatibilityRow {
+    const zig_versions = [_][]const u8{ "master", "0.14.0", "0.13.0", "0.12.0" };
+    const statuses = [_][]const u8{ "Latest", "Stable", "Previous", "Legacy" };
+
+    var matrix = std.ArrayList(StatsPageData.CompatibilityRow).init(alloc);
+    defer matrix.deinit();
+
+    for (zig_versions, 0..) |version, i| {
+        const stats = fetchVersionStats(alloc, version) catch .{ .packages_tested = 0, .success_rate = "N/A" };
+
+        const row = StatsPageData.CompatibilityRow{
+            .zig_version = alloc.dupe(u8, version) catch continue,
+            .packages_tested = stats.packages_tested,
+            .success_rate = stats.success_rate,
+            .status = alloc.dupe(u8, statuses[i]) catch continue,
+        };
+        matrix.append(row) catch continue;
+    }
+
+    return matrix.toOwnedSlice() catch &[_]StatsPageData.CompatibilityRow{};
+}
+
+const VersionStats = struct {
+    packages_tested: i32,
+    success_rate: []const u8,
+};
+
+fn fetchVersionStats(alloc: Allocator, zig_version: []const u8) !VersionStats {
+    const StatsRow = struct {
+        total: i64,
+        successful: i64,
+    };
+
+    const query =
+        \\SELECT 
+        \\  COUNT(*) as total,
+        \\  SUM(CASE WHEN build_status = 'success' THEN 1 ELSE 0 END) as successful
+        \\FROM build_results WHERE zig_version = :version
+    ;
+
+    var stmt = db.prepare(struct { version: sqlite.Text }, StatsRow, query) catch {
+        return VersionStats{ .packages_tested = 0, .success_rate = alloc.dupe(u8, "N/A") catch "N/A" };
+    };
+    defer stmt.finalize();
+
+    stmt.bind(.{ .version = sqlite.text(zig_version) }) catch {
+        return VersionStats{ .packages_tested = 0, .success_rate = alloc.dupe(u8, "N/A") catch "N/A" };
+    };
+    defer stmt.reset();
+
+    if (stmt.step() catch null) |row| {
+        const total = @as(i32, @intCast(row.total));
+        if (total == 0) {
+            return VersionStats{ .packages_tested = 0, .success_rate = alloc.dupe(u8, "N/A") catch "N/A" };
+        }
+
+        const rate = (@as(f64, @floatFromInt(row.successful)) / @as(f64, @floatFromInt(row.total))) * 100.0;
+        const success_rate = std.fmt.allocPrint(alloc, "{d:.1}%", .{rate}) catch "N/A";
+
+        return VersionStats{ .packages_tested = total, .success_rate = success_rate };
+    }
+
+    return VersionStats{ .packages_tested = 0, .success_rate = alloc.dupe(u8, "N/A") catch "N/A" };
+}
+
+fn fetchTopPackages(alloc: Allocator) ![]StatsPageData.TopPackage {
+    const PackageRow = struct {
+        name: sqlite.Text,
+        author: ?sqlite.Text,
+        total_builds: i64,
+        successful_builds: i64,
+    };
+
+    const query =
+        \\SELECT p.name, p.author, 
+        \\  COUNT(br.id) as total_builds,
+        \\  SUM(CASE WHEN br.build_status = 'success' THEN 1 ELSE 0 END) as successful_builds
+        \\FROM packages p 
+        \\LEFT JOIN build_results br ON p.id = br.package_id 
+        \\GROUP BY p.id, p.name, p.author 
+        \\HAVING total_builds > 0
+        \\ORDER BY (successful_builds * 1.0 / total_builds) DESC, total_builds DESC 
+        \\LIMIT 10
+    ;
+
+    var stmt = db.prepare(struct {}, PackageRow, query) catch return &[_]StatsPageData.TopPackage{};
+    defer stmt.finalize();
+
+    stmt.bind(.{}) catch return &[_]StatsPageData.TopPackage{};
+    defer stmt.reset();
+
+    var packages = std.ArrayList(StatsPageData.TopPackage).init(alloc);
+    defer packages.deinit();
+
+    while (stmt.step() catch null) |row| {
+        const total = @as(f64, @floatFromInt(row.total_builds));
+        const successful = @as(f64, @floatFromInt(row.successful_builds));
+        const rate = if (total > 0) (successful / total) * 100.0 else 0.0;
+
+        const package = StatsPageData.TopPackage{
+            .name = alloc.dupe(u8, row.name.data) catch continue,
+            .author = if (row.author) |auth| alloc.dupe(u8, auth.data) catch "Unknown" else "Unknown",
+            .success_rate = std.fmt.allocPrint(alloc, "{d:.1}%", .{rate}) catch continue,
+            .total_builds = @intCast(row.total_builds),
+        };
+        packages.append(package) catch continue;
+    }
+
+    return packages.toOwnedSlice() catch &[_]StatsPageData.TopPackage{};
+}
+
+fn fetchRecentActivity(alloc: Allocator) ![]StatsPageData.RecentActivity {
+    const ActivityRow = struct {
+        package_name: sqlite.Text,
+        zig_version: sqlite.Text,
+        build_status: sqlite.Text,
+        created_at: sqlite.Text,
+    };
+
+    const query =
+        \\SELECT p.name as package_name, br.zig_version, br.build_status, br.created_at
+        \\FROM build_results br 
+        \\JOIN packages p ON br.package_id = p.id 
+        \\ORDER BY br.created_at DESC LIMIT 10
+    ;
+
+    var stmt = db.prepare(struct {}, ActivityRow, query) catch return &[_]StatsPageData.RecentActivity{};
+    defer stmt.finalize();
+
+    stmt.bind(.{}) catch return &[_]StatsPageData.RecentActivity{};
+    defer stmt.reset();
+
+    var activities = std.ArrayList(StatsPageData.RecentActivity).init(alloc);
+    defer activities.deinit();
+
+    while (stmt.step() catch null) |row| {
+        const activity = StatsPageData.RecentActivity{
+            .package_name = alloc.dupe(u8, row.package_name.data) catch continue,
+            .zig_version = alloc.dupe(u8, row.zig_version.data) catch continue,
+            .build_status = alloc.dupe(u8, row.build_status.data) catch continue,
+            .timestamp = alloc.dupe(u8, row.created_at.data) catch continue,
+        };
+        activities.append(activity) catch continue;
+    }
+
+    return activities.toOwnedSlice() catch &[_]StatsPageData.RecentActivity{};
+}
+
+fn freeHomeStatsData(alloc: Allocator, data: HomeStatsData) void {
+    alloc.free(data.success_rate);
+
+    for (data.recent_packages) |pkg| {
+        alloc.free(pkg.name);
+        alloc.free(pkg.author);
+        alloc.free(pkg.created_at);
+    }
+    alloc.free(data.recent_packages);
+
+    for (data.recent_builds) |build| {
+        alloc.free(build.package_name);
+        alloc.free(build.zig_version);
+        alloc.free(build.build_status);
+    }
+    alloc.free(data.recent_builds);
+}
+
+fn freeStatsPageData(alloc: Allocator, data: StatsPageData) void {
+    for (data.compatibility_matrix) |row| {
+        alloc.free(row.zig_version);
+        alloc.free(row.success_rate);
+        alloc.free(row.status);
+    }
+    alloc.free(data.compatibility_matrix);
+
+    for (data.top_packages) |pkg| {
+        alloc.free(pkg.name);
+        alloc.free(pkg.author);
+        alloc.free(pkg.success_rate);
+    }
+    alloc.free(data.top_packages);
+
+    for (data.recent_activity) |activity| {
+        alloc.free(activity.package_name);
+        alloc.free(activity.zig_version);
+        alloc.free(activity.build_status);
+        alloc.free(activity.timestamp);
+    }
+    alloc.free(data.recent_activity);
 }
 
 pub fn main() !void {
