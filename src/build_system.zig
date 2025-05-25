@@ -221,25 +221,32 @@ pub const BuildSystem = struct {
         // Nothing to cleanup for now
     }
 
-    /// Check if Docker is available
+    /// Check if Docker is available - simplified version without reading output
     pub fn checkDockerAvailable(self: *Self) BuildError!bool {
+        log.info("Checking Docker availability...", .{});
+
+        // Use the simple Child.run approach but with limited output
         const result = std.process.Child.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{ "docker", "--version" },
+            .max_output_bytes = 1024, // Small buffer to avoid hanging
         }) catch |err| {
-            log.err("Failed to execute 'docker --version' command at {s}:{}: {}", .{ @src().file, @src().line, err });
+            log.err("Failed to execute 'docker --version' command: {}", .{err});
             return BuildError.DockerNotFound;
         };
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
 
+        log.debug("Docker command completed, processing result...", .{});
+
         const success = result.term == .Exited and result.term.Exited == 0;
         if (!success) {
-            log.err("Docker command failed at {s}:{} - exit code: {}, stderr: {s}", .{ @src().file, @src().line, result.term, result.stderr });
+            log.err("Docker command failed - exit code: {}, stderr: {s}", .{ result.term, result.stderr });
         } else {
-            log.debug("Docker is available - stdout: {s}", .{result.stdout});
+            log.debug("Docker is available - stdout length: {}", .{result.stdout.len});
         }
 
+        log.info("Docker availability check completed: {}", .{success});
         return success;
     }
 

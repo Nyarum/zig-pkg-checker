@@ -6,6 +6,11 @@ const std = @import("std");
 const log = std.log.scoped(.main);
 const Allocator = std.mem.Allocator;
 
+// Configure log level to ensure logging works in all build modes
+pub const std_options: std.Options = .{
+    .log_level = .info,
+};
+
 const zzz = @import("zzz");
 const http = zzz.HTTP;
 const sqlite = @import("sqlite");
@@ -2875,24 +2880,35 @@ fn freeStatsPageData(alloc: Allocator, data: StatsPageData) void {
 }
 
 pub fn main() !void {
+    log.info("Starting zig-pkg-checker application...", .{});
+
     gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = true }){};
     defer _ = gpa.deinit();
     allocator = gpa.allocator();
+    log.info("Memory allocator initialized", .{});
 
     // Initialize database
+    log.info("Initializing database...", .{});
     initializeDatabase() catch |err| {
         log.err("Database initialization failed: {}", .{err});
         return;
     };
     defer db.close();
+    log.info("Database initialization completed", .{});
 
     // Initialize build system
+    log.info("Initializing Tardy runtime...", .{});
     var t = try Tardy.init(allocator, .{ .threading = .single });
     defer t.deinit();
+    log.info("Tardy runtime initialized", .{});
+
+    log.info("Initializing build system...", .{});
     build_sys = build_system.BuildSystem.init(allocator, &db, &t);
     defer build_sys.deinit();
+    log.info("Build system initialized", .{});
 
     // Check if Docker is available
+    log.info("Starting Docker availability check...", .{});
     const docker_available = build_sys.checkDockerAvailable() catch |err| blk: {
         log.warn("Docker check failed: {}. Build system will be disabled.", .{err});
         break :blk false;
@@ -2903,13 +2919,18 @@ pub fn main() !void {
     } else {
         log.warn("Docker not available. Build system disabled.", .{});
     }
+    log.info("Docker check phase completed", .{});
 
     const host = "127.0.0.1";
     const port = 3001;
+    log.info("Server configuration: host={s}, port={}", .{ host, port });
 
     // Create static directory for serving files
+    log.info("Opening static directory...", .{});
     const static_dir = Dir.from_std(try std.fs.cwd().openDir("static", .{}));
+    log.info("Static directory opened", .{});
 
+    log.info("Initializing router...", .{});
     var router = try Router.init(allocator, &.{
         Route.init("/").get({}, home_handler).layer(),
         Route.init("/packages").get({}, packages_handler).layer(),
@@ -2930,12 +2951,17 @@ pub fn main() !void {
         Route.init("/test").get({}, test_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
+    log.info("Router initialized with all routes", .{});
 
     // create socket for tardy
+    log.info("Creating socket...", .{});
     var socket = try Socket.init(.{ .tcp = .{ .host = host, .port = port } });
     defer socket.close_blocking();
+    log.info("Socket created, binding...", .{});
     try socket.bind();
+    log.info("Socket bound, starting to listen...", .{});
     try socket.listen(4096);
+    log.info("Socket listening on port {}", .{port});
 
     log.info("Server listening on http://{s}:{}", .{ host, port });
     log.info("Available endpoints:", .{});
@@ -2961,9 +2987,11 @@ pub fn main() !void {
 
     // Cleanup old build artifacts on startup
     if (docker_available) {
+        log.info("Cleaning up old build artifacts...", .{});
         build_sys.cleanup() catch |err| {
             log.warn("Failed to cleanup old build artifacts: {}", .{err});
         };
+        log.info("Build artifacts cleanup completed", .{});
     }
 
     const EntryParams = struct {
@@ -2971,6 +2999,7 @@ pub fn main() !void {
         socket: Socket,
     };
 
+    log.info("Starting Tardy entry point...", .{});
     try t.entry(
         EntryParams{ .router = &router, .socket = socket },
         struct {
