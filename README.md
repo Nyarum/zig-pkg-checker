@@ -2,6 +2,8 @@
 
 A comprehensive build system and compatibility checker for Zig packages across multiple Zig versions. This system automatically fetches packages from URLs, builds them with different Zig versions using Docker containers, and provides detailed compatibility reports.
 
+![Demo](static/demo.png)
+
 ## Features
 
 - 🐳 **Docker-based builds** - Isolated build environments for each Zig version
