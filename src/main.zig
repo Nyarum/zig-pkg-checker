@@ -34,6 +34,338 @@ var allocator: Allocator = undefined;
 var build_sys: build_system.BuildSystem = undefined;
 var global_runtime: ?*Runtime = null;
 
+// Admin authentication system
+const ADMIN_TOKEN = "zig-pkg-checker-admin-2024"; // Simple stub token
+var cron_system: ?*CronSystem = null;
+
+// Cron job system for automated tasks
+const CronSystem = struct {
+    allocator: Allocator,
+    runtime: *Runtime,
+    db: *sqlite.Database,
+    build_system: *build_system.BuildSystem,
+    daily_thread: ?std.Thread = null,
+    build_check_thread: ?std.Thread = null,
+    is_running: bool = false,
+
+    const Self = @This();
+
+    pub fn init(alloc: Allocator, runtime: *Runtime, database: *sqlite.Database, build_sys_ptr: *build_system.BuildSystem) !*Self {
+        const self = try alloc.create(Self);
+        self.* = Self{
+            .allocator = alloc,
+            .runtime = runtime,
+            .db = database,
+            .build_system = build_sys_ptr,
+            .daily_thread = null,
+            .build_check_thread = null,
+            .is_running = false,
+        };
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.stop();
+        self.allocator.destroy(self);
+    }
+
+    pub fn start(self: *Self) !void {
+        if (self.is_running) return;
+
+        log.info("Starting cron system for automated build checks", .{});
+
+        self.is_running = true;
+
+        // Spawn background thread for daily checks
+        self.daily_thread = std.Thread.spawn(.{
+            .stack_size = 2 * 1024 * 1024, // 2MB stack
+        }, dailyCheckTask, .{self}) catch |err| {
+            log.err("Failed to spawn daily check task: {}", .{err});
+            self.is_running = false;
+            return err;
+        };
+
+        // Spawn background thread for build health checks
+        self.build_check_thread = std.Thread.spawn(.{
+            .stack_size = 2 * 1024 * 1024, // 2MB stack
+        }, buildHealthCheckTask, .{self}) catch |err| {
+            log.err("Failed to spawn build health check task: {}", .{err});
+            if (self.daily_thread) |thread| {
+                self.is_running = false;
+                thread.join();
+                self.daily_thread = null;
+            }
+            return err;
+        };
+
+        log.info("Cron system started successfully", .{});
+    }
+
+    pub fn stop(self: *Self) void {
+        if (!self.is_running) return;
+
+        log.info("Stopping cron system", .{});
+
+        self.is_running = false;
+
+        if (self.daily_thread) |thread| {
+            thread.join();
+            self.daily_thread = null;
+        }
+
+        if (self.build_check_thread) |thread| {
+            thread.join();
+            self.build_check_thread = null;
+        }
+
+        log.info("Cron system stopped", .{});
+    }
+
+    // Daily task to check for packages that need builds
+    fn dailyCheckTask(self: *Self) void {
+        log.info("Starting daily package check task", .{});
+
+        while (self.is_running) {
+            // Sleep for 24 hours, but check every minute if we should stop
+            const total_sleep_minutes = 24 * 60; // 24 hours in minutes
+            var minutes_slept: u32 = 0;
+
+            while (minutes_slept < total_sleep_minutes and self.is_running) {
+                std.time.sleep(60 * std.time.ns_per_s); // Sleep 1 minute
+                minutes_slept += 1;
+            }
+
+            if (!self.is_running) break;
+
+            log.info("Executing daily package build check", .{});
+            self.checkAllPackagesForBuilds() catch |err| {
+                log.err("Daily package check failed: {}", .{err});
+            };
+        }
+
+        log.info("Daily check task terminated", .{});
+    }
+
+    // Build health check task to detect stalled builds
+    fn buildHealthCheckTask(self: *Self) void {
+        log.info("Starting build health check task", .{});
+
+        while (self.is_running) {
+            // Sleep for 30 minutes, but check every minute if we should stop
+            const total_sleep_minutes = 30; // 30 minutes
+            var minutes_slept: u32 = 0;
+
+            while (minutes_slept < total_sleep_minutes and self.is_running) {
+                std.time.sleep(60 * std.time.ns_per_s); // Sleep 1 minute
+                minutes_slept += 1;
+            }
+
+            if (!self.is_running) break;
+
+            log.info("Executing build health check", .{});
+            self.checkStalledBuilds() catch |err| {
+                log.err("Build health check failed: {}", .{err});
+            };
+        }
+
+        log.info("Build health check task terminated", .{});
+    }
+
+    // Check all packages for missing or outdated builds
+    fn checkAllPackagesForBuilds(self: *Self) !void {
+        log.info("Checking all packages for missing builds", .{});
+
+        const PackageRow = struct {
+            id: i64,
+            name: sqlite.Text,
+            url: sqlite.Text,
+            last_updated: sqlite.Text,
+        };
+
+        const query = "SELECT id, name, url, last_updated FROM packages ORDER BY last_updated ASC";
+        var stmt = self.db.prepare(struct {}, PackageRow, query) catch |err| {
+            log.err("Failed to prepare packages query for daily check: {}", .{err});
+            return err;
+        };
+        defer stmt.finalize();
+
+        stmt.bind(.{}) catch |err| {
+            log.err("Failed to bind packages query for daily check: {}", .{err});
+            return err;
+        };
+        defer stmt.reset();
+
+        var packages_checked: usize = 0;
+        var builds_started: usize = 0;
+
+        while (stmt.step() catch null) |pkg| {
+            packages_checked += 1;
+
+            // Check if package has builds for all Zig versions
+            const missing_builds = try self.getMissingBuildsForPackage(pkg.id);
+            defer self.allocator.free(missing_builds);
+
+            if (missing_builds.len > 0) {
+                log.info("Package '{s}' (ID: {d}) is missing builds for {d} Zig versions", .{ pkg.name.data, pkg.id, missing_builds.len });
+
+                // Start builds for missing versions
+                const package_name = try self.allocator.dupe(u8, pkg.name.data);
+                defer self.allocator.free(package_name);
+                const repo_url = try self.allocator.dupe(u8, pkg.url.data);
+                defer self.allocator.free(repo_url);
+
+                self.build_system.startPackageBuilds(pkg.id, package_name, repo_url) catch |err| {
+                    log.err("Failed to start builds for package '{s}': {}", .{ pkg.name.data, err });
+                    continue;
+                };
+
+                builds_started += 1;
+            }
+        }
+
+        log.info("Daily check completed: {d} packages checked, {d} build processes started", .{ packages_checked, builds_started });
+    }
+
+    // Check for stalled builds (pending for too long)
+    fn checkStalledBuilds(self: *Self) !void {
+        log.info("Checking for stalled builds", .{});
+
+        const StalledBuildRow = struct {
+            package_id: i64,
+            package_name: sqlite.Text,
+            package_url: sqlite.Text,
+            zig_version: sqlite.Text,
+            last_checked: sqlite.Text,
+        };
+
+        // Find builds that have been pending for more than 2 hours
+        const query =
+            \\SELECT br.package_id, p.name as package_name, p.url as package_url, 
+            \\       br.zig_version, br.last_checked
+            \\FROM build_results br
+            \\JOIN packages p ON br.package_id = p.id
+            \\WHERE br.build_status = 'pending' 
+            \\  AND datetime(br.last_checked) < datetime('now', '-2 hours')
+            \\ORDER BY br.last_checked ASC
+        ;
+
+        var stmt = self.db.prepare(struct {}, StalledBuildRow, query) catch |err| {
+            log.err("Failed to prepare stalled builds query: {}", .{err});
+            return err;
+        };
+        defer stmt.finalize();
+
+        stmt.bind(.{}) catch |err| {
+            log.err("Failed to bind stalled builds query: {}", .{err});
+            return err;
+        };
+        defer stmt.reset();
+
+        var stalled_count: usize = 0;
+        var restarted_count: usize = 0;
+
+        while (stmt.step() catch null) |build| {
+            stalled_count += 1;
+            log.warn("Found stalled build: package '{s}' (ID: {d}), Zig {s}, pending since {s}", .{ build.package_name.data, build.package_id, build.zig_version.data, build.last_checked.data });
+
+            // Restart the build
+            const package_name = try self.allocator.dupe(u8, build.package_name.data);
+            defer self.allocator.free(package_name);
+            const repo_url = try self.allocator.dupe(u8, build.package_url.data);
+            defer self.allocator.free(repo_url);
+
+            self.build_system.startPackageBuilds(build.package_id, package_name, repo_url) catch |err| {
+                log.err("Failed to restart stalled build for package '{s}': {}", .{ build.package_name.data, err });
+                continue;
+            };
+
+            restarted_count += 1;
+        }
+
+        if (stalled_count > 0) {
+            log.info("Stalled build check completed: {d} stalled builds found, {d} restarted", .{ stalled_count, restarted_count });
+        } else {
+            log.debug("No stalled builds found", .{});
+        }
+    }
+
+    // Get missing build versions for a package
+    fn getMissingBuildsForPackage(self: *Self, package_id: i64) ![][]const u8 {
+        const all_versions = [_][]const u8{ "master", "0.14.0", "0.13.0", "0.12.0" };
+
+        const ExistingVersionRow = struct {
+            zig_version: sqlite.Text,
+        };
+
+        const query = "SELECT zig_version FROM build_results WHERE package_id = :package_id";
+        var stmt = self.db.prepare(struct { package_id: i64 }, ExistingVersionRow, query) catch |err| {
+            log.err("Failed to prepare existing versions query: {}", .{err});
+            return &[_][]const u8{};
+        };
+        defer stmt.finalize();
+
+        stmt.bind(.{ .package_id = package_id }) catch |err| {
+            log.err("Failed to bind existing versions query: {}", .{err});
+            return &[_][]const u8{};
+        };
+        defer stmt.reset();
+
+        var existing_versions = std.ArrayList([]const u8).init(self.allocator);
+        defer {
+            for (existing_versions.items) |version| {
+                self.allocator.free(version);
+            }
+            existing_versions.deinit();
+        }
+
+        while (stmt.step() catch null) |row| {
+            const version = try self.allocator.dupe(u8, row.zig_version.data);
+            try existing_versions.append(version);
+        }
+
+        var missing_versions = std.ArrayList([]const u8).init(self.allocator);
+        defer missing_versions.deinit();
+
+        for (all_versions) |version| {
+            var found = false;
+            for (existing_versions.items) |existing| {
+                if (std.mem.eql(u8, version, existing)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                const missing_version = try self.allocator.dupe(u8, version);
+                try missing_versions.append(missing_version);
+            }
+        }
+
+        return missing_versions.toOwnedSlice();
+    }
+};
+
+// Admin authentication middleware
+fn requireAdminAuth(ctx: *const Context) bool {
+    const auth_header = ctx.request.headers.get("Authorization") orelse {
+        log.debug("No Authorization header found", .{});
+        return false;
+    };
+
+    if (!std.mem.startsWith(u8, auth_header, "Bearer ")) {
+        log.debug("Authorization header does not start with 'Bearer '", .{});
+        return false;
+    }
+
+    const token = auth_header["Bearer ".len..];
+    const is_valid = std.mem.eql(u8, token, ADMIN_TOKEN);
+
+    if (!is_valid) {
+        log.warn("Invalid admin token provided: {s}", .{token});
+    }
+
+    return is_valid;
+}
+
 // Template data structures
 const PackageTemplateData = struct {
     packages: []Package,
@@ -2591,6 +2923,10 @@ pub fn main() !void {
         Route.init("/api/health").get({}, api_health_handler).layer(),
         Route.init("/api/github-info").post({}, api_github_info_handler).layer(),
         Route.init("/api/packages").get({}, api_get_packages).post({}, api_create_package).layer(),
+        // Admin API endpoints (require authentication)
+        Route.init("/admin/trigger-build").post({}, admin_trigger_build_handler).layer(),
+        Route.init("/admin/check-builds").post({}, admin_check_builds_handler).layer(),
+        Route.init("/admin/status").get({}, admin_status_handler).layer(),
         Route.init("/test").get({}, test_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
@@ -2615,7 +2951,13 @@ pub fn main() !void {
     log.info("  - POST /api/github-info - Get GitHub repository info", .{});
     log.info("  - GET /api/packages - List packages", .{});
     log.info("  - POST /api/packages - Submit package", .{});
+    log.info("  - POST /admin/trigger-build - Manually trigger builds (admin only)", .{});
+    log.info("  - POST /admin/check-builds - Check for stalled builds (admin only)", .{});
+    log.info("  - GET /admin/status - System status (admin only)", .{});
     log.info("  - GET /test        - Test handler", .{});
+    log.info("", .{});
+    log.info("Admin token: {s}", .{ADMIN_TOKEN});
+    log.info("Use 'Authorization: Bearer {s}' header for admin endpoints", .{ADMIN_TOKEN});
 
     // Cleanup old build artifacts on startup
     if (docker_available) {
@@ -2637,6 +2979,22 @@ pub fn main() !void {
                 global_runtime = rt;
                 log.info("Runtime context set for build system", .{});
 
+                // Initialize cron system for automated tasks
+                cron_system = CronSystem.init(allocator, rt, &db, &build_sys) catch |err| blk: {
+                    log.err("Failed to initialize cron system: {}", .{err});
+                    break :blk null;
+                };
+
+                if (cron_system) |cron| {
+                    cron.start() catch |err| {
+                        log.err("Failed to start cron system: {}", .{err});
+                        cron.deinit();
+                        cron_system = null;
+                    };
+                } else {
+                    log.warn("Cron system not available - automated build checks disabled", .{});
+                }
+
                 var server = Server.init(.{
                     .stack_size = 1024 * 1024 * 4,
                     .socket_buffer_bytes = 1024 * 2,
@@ -2647,6 +3005,13 @@ pub fn main() !void {
             }
         }.entry,
     );
+
+    // Cleanup cron system after server stops
+    if (cron_system) |cron| {
+        log.info("Shutting down cron system", .{});
+        cron.deinit();
+        cron_system = null;
+    }
 }
 
 test "basic add functionality" {
@@ -2663,4 +3028,316 @@ test "fuzz example" {
         }
     };
     try std.testing.fuzz(TestContext{}, TestContext.testOne, .{});
+}
+
+// Admin API endpoints (require authentication)
+
+// Admin endpoint to manually trigger builds for a specific package
+fn admin_trigger_build_handler(ctx: *const Context, _: void) !Respond {
+    // Check admin authentication
+    if (!requireAdminAuth(ctx)) {
+        return ctx.response.apply(.{ .status = .Unauthorized, .mime = http.Mime.JSON, .body = 
+            \\{
+            \\  "error": "Unauthorized. Admin token required.",
+            \\  "message": "Include 'Authorization: Bearer <token>' header with valid admin token."
+            \\}
+        });
+    }
+
+    if (ctx.request.method) |method| {
+        if (method != .POST) {
+            return ctx.response.apply(.{ .status = .@"Method Not Allowed", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Method not allowed. Use POST."
+                \\}
+            });
+        }
+    }
+
+    // Read request body
+    const body = ctx.request.body orelse {
+        return ctx.response.apply(.{ .status = .@"Bad Request", .mime = http.Mime.JSON, .body = 
+            \\{
+            \\  "error": "Request body is required",
+            \\  "expected": "{ \"package_id\": number } or { \"package_name\": \"string\" }"
+            \\}
+        });
+    };
+
+    log.info("Admin build trigger request: {s}", .{body});
+
+    // Extract package identifier from JSON request
+    const package_id_str = extractJsonField(ctx.allocator, body, "package_id");
+    defer if (package_id_str) |s| ctx.allocator.free(s);
+
+    const package_name = extractJsonField(ctx.allocator, body, "package_name");
+    defer if (package_name) |s| ctx.allocator.free(s);
+
+    if (package_id_str == null and package_name == null) {
+        return ctx.response.apply(.{ .status = .@"Bad Request", .mime = http.Mime.JSON, .body = 
+            \\{
+            \\  "error": "Either 'package_id' or 'package_name' is required"
+            \\}
+        });
+    }
+
+    // Get package information
+    var package_id: i64 = 0;
+    var pkg_name: []const u8 = "";
+    var pkg_url: []const u8 = "";
+
+    if (package_id_str) |id_str| {
+        package_id = std.fmt.parseInt(i64, id_str, 10) catch {
+            return ctx.response.apply(.{ .status = .@"Bad Request", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Invalid package_id format. Must be a number."
+                \\}
+            });
+        };
+    } else if (package_name) |name| {
+        // Look up package by name
+        const PackageRow = struct {
+            id: i64,
+            name: sqlite.Text,
+            url: sqlite.Text,
+        };
+
+        const query = "SELECT id, name, url FROM packages WHERE name = :name";
+        var stmt = db.prepare(struct { name: sqlite.Text }, PackageRow, query) catch |err| {
+            log.err("Failed to prepare package lookup query: {}", .{err});
+            return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Database query failed"
+                \\}
+            });
+        };
+        defer stmt.finalize();
+
+        stmt.bind(.{ .name = sqlite.text(name) }) catch |err| {
+            log.err("Failed to bind package name: {}", .{err});
+            return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Database query failed"
+                \\}
+            });
+        };
+        defer stmt.reset();
+
+        const package_info = stmt.step() catch |err| {
+            log.err("Failed to execute package lookup: {}", .{err});
+            return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Database query failed"
+                \\}
+            });
+        } orelse {
+            return ctx.response.apply(.{ .status = .@"Not Found", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Package not found"
+                \\}
+            });
+        };
+
+        package_id = package_info.id;
+        pkg_name = try ctx.allocator.dupe(u8, package_info.name.data);
+        pkg_url = try ctx.allocator.dupe(u8, package_info.url.data);
+    }
+
+    // If we only have package_id, look up the name and URL
+    if (pkg_name.len == 0) {
+        const PackageRow = struct {
+            name: sqlite.Text,
+            url: sqlite.Text,
+        };
+
+        const query = "SELECT name, url FROM packages WHERE id = :id";
+        var stmt = db.prepare(struct { id: i64 }, PackageRow, query) catch |err| {
+            log.err("Failed to prepare package info query: {}", .{err});
+            return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Database query failed"
+                \\}
+            });
+        };
+        defer stmt.finalize();
+
+        stmt.bind(.{ .id = package_id }) catch |err| {
+            log.err("Failed to bind package ID: {}", .{err});
+            return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Database query failed"
+                \\}
+            });
+        };
+        defer stmt.reset();
+
+        const package_info = stmt.step() catch |err| {
+            log.err("Failed to execute package info query: {}", .{err});
+            return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Database query failed"
+                \\}
+            });
+        } orelse {
+            return ctx.response.apply(.{ .status = .@"Not Found", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Package not found"
+                \\}
+            });
+        };
+
+        pkg_name = try ctx.allocator.dupe(u8, package_info.name.data);
+        pkg_url = try ctx.allocator.dupe(u8, package_info.url.data);
+    }
+
+    defer if (pkg_name.len > 0) ctx.allocator.free(pkg_name);
+    defer if (pkg_url.len > 0) ctx.allocator.free(pkg_url);
+
+    log.info("Admin triggering build for package '{s}' (ID: {d})", .{ pkg_name, package_id });
+
+    // Start builds for all Zig versions
+    if (global_runtime) |rt| {
+        startPackageBuildsWithRuntime(rt, package_id, pkg_name, pkg_url) catch |err| {
+            log.err("Failed to start builds for package {d}: {}", .{ package_id, err });
+            return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Failed to start build process"
+                \\}
+            });
+        };
+    } else {
+        build_sys.startPackageBuilds(package_id, pkg_name, pkg_url) catch |err| {
+            log.err("Failed to start builds for package {d}: {}", .{ package_id, err });
+            return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Failed to start build process"
+                \\}
+            });
+        };
+    }
+
+    const response_body = try std.fmt.allocPrint(ctx.allocator,
+        \\{{
+        \\  "message": "Build triggered successfully",
+        \\  "package_id": {d},
+        \\  "package_name": "{s}",
+        \\  "status": "Build started for all Zig versions"
+        \\}}
+    , .{ package_id, pkg_name });
+
+    return ctx.response.apply(.{
+        .status = .OK,
+        .mime = http.Mime.JSON,
+        .body = response_body,
+    });
+}
+
+// Admin endpoint to check for stalled builds and restart them
+fn admin_check_builds_handler(ctx: *const Context, _: void) !Respond {
+    // Check admin authentication
+    if (!requireAdminAuth(ctx)) {
+        return ctx.response.apply(.{ .status = .Unauthorized, .mime = http.Mime.JSON, .body = 
+            \\{
+            \\  "error": "Unauthorized. Admin token required.",
+            \\  "message": "Include 'Authorization: Bearer <token>' header with valid admin token."
+            \\}
+        });
+    }
+
+    if (ctx.request.method) |method| {
+        if (method != .POST) {
+            return ctx.response.apply(.{ .status = .@"Method Not Allowed", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Method not allowed. Use POST."
+                \\}
+            });
+        }
+    }
+
+    log.info("Admin triggered build health check", .{});
+
+    if (cron_system) |cron| {
+        // Manually trigger the stalled build check
+        cron.checkStalledBuilds() catch |err| {
+            log.err("Admin build check failed: {}", .{err});
+            return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Build health check failed"
+                \\}
+            });
+        };
+
+        return ctx.response.apply(.{ .status = .OK, .mime = http.Mime.JSON, .body = 
+            \\{
+            \\  "message": "Build health check completed successfully",
+            \\  "status": "Stalled builds have been identified and restarted"
+            \\}
+        });
+    } else {
+        return ctx.response.apply(.{ .status = .@"Service Unavailable", .mime = http.Mime.JSON, .body = 
+            \\{
+            \\  "error": "Cron system not available"
+            \\}
+        });
+    }
+}
+
+// Admin endpoint to get system status
+fn admin_status_handler(ctx: *const Context, _: void) !Respond {
+    // Check admin authentication
+    if (!requireAdminAuth(ctx)) {
+        return ctx.response.apply(.{ .status = .Unauthorized, .mime = http.Mime.JSON, .body = 
+            \\{
+            \\  "error": "Unauthorized. Admin token required.",
+            \\  "message": "Include 'Authorization: Bearer <token>' header with valid admin token."
+            \\}
+        });
+    }
+
+    if (ctx.request.method) |method| {
+        if (method != .GET) {
+            return ctx.response.apply(.{ .status = .@"Method Not Allowed", .mime = http.Mime.JSON, .body = 
+                \\{
+                \\  "error": "Method not allowed. Use GET."
+                \\}
+            });
+        }
+    }
+
+    // Get system statistics
+    const total_packages = fetchTotalPackagesCount() catch 0;
+    const build_counts = fetchBuildCounts() catch .{ .successful = 0, .failed = 0 };
+    const pending_count = fetchPendingBuildsCount() catch 0;
+
+    // Check Docker availability
+    const docker_available = build_sys.checkDockerAvailable() catch false;
+
+    // Check cron system status
+    const cron_running = if (cron_system) |cron| cron.is_running else false;
+
+    const response_body = try std.fmt.allocPrint(ctx.allocator,
+        \\{{
+        \\  "status": "ok",
+        \\  "timestamp": "{d}",
+        \\  "system": {{
+        \\    "docker_available": {s},
+        \\    "cron_system_running": {s},
+        \\    "runtime_available": {s}
+        \\  }},
+        \\  "statistics": {{
+        \\    "total_packages": {d},
+        \\    "successful_builds": {d},
+        \\    "failed_builds": {d},
+        \\    "pending_builds": {d},
+        \\    "total_builds": {d}
+        \\  }},
+        \\  "admin_token": "Active"
+        \\}}
+    , .{ std.time.timestamp(), if (docker_available) "true" else "false", if (cron_running) "true" else "false", if (global_runtime != null) "true" else "false", total_packages, build_counts.successful, build_counts.failed, pending_count, build_counts.successful + build_counts.failed + pending_count });
+
+    return ctx.response.apply(.{
+        .status = .OK,
+        .mime = http.Mime.JSON,
+        .body = response_body,
+    });
 }

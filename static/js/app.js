@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initializePackageSearch();
     initializeSubmissionForm();
     initializePackageFilters();
+    initializeAdminFeatures();
 });
 
 // Package filtering and search functionality
@@ -307,6 +308,11 @@ function renderPackages(packages) {
             ` : ''}
         </div>
     `).join('');
+    
+    // Add admin buttons if in admin mode
+    if (isAdminMode) {
+        addAdminButtonsToPackages();
+    }
 }
 
 function renderPagination(total, currentPage, limit) {
@@ -437,5 +443,270 @@ function initializeSubmissionForm() {
             // TODO: Add form validation and AJAX submission
             console.log('Form submitted');
         });
+    }
+}
+
+// Admin functionality
+let adminToken = null;
+let isAdminMode = false;
+
+function initializeAdminFeatures() {
+    // Check if admin token is stored in localStorage
+    adminToken = localStorage.getItem('admin_token');
+    if (adminToken) {
+        verifyAdminToken();
+    }
+    
+    // Add admin login button to navigation if not already present
+    addAdminLoginButton();
+    
+    // Initialize admin panel if on packages page
+    if (document.getElementById('packages-grid')) {
+        initializeAdminPanel();
+    }
+}
+
+function addAdminLoginButton() {
+    // Check if admin button already exists
+    if (document.getElementById('admin-login-btn')) return;
+    
+    const adminButton = document.createElement('button');
+    adminButton.id = 'admin-login-btn';
+    adminButton.className = 'fixed top-20 right-4 z-50 px-3 py-2 bg-gray-800 text-white rounded-lg text-sm hover:bg-gray-700 transition-colors shadow-lg';
+    adminButton.innerHTML = isAdminMode ? '<i class="fas fa-user-shield mr-1"></i> Admin' : '<i class="fas fa-key mr-1"></i> Admin Login';
+    adminButton.onclick = isAdminMode ? showAdminPanel : showAdminLogin;
+    
+    document.body.appendChild(adminButton);
+}
+
+function showAdminLogin() {
+    const token = prompt('Enter admin token:');
+    if (token) {
+        adminToken = token;
+        localStorage.setItem('admin_token', token);
+        verifyAdminToken();
+    }
+}
+
+async function verifyAdminToken() {
+    if (!adminToken) return;
+    
+    try {
+        const response = await fetch('/admin/status', {
+            headers: {
+                'Authorization': `Bearer ${adminToken}`
+            }
+        });
+        
+        if (response.ok) {
+            isAdminMode = true;
+            console.log('Admin authentication successful');
+            updateAdminUI();
+        } else {
+            isAdminMode = false;
+            adminToken = null;
+            localStorage.removeItem('admin_token');
+            console.log('Admin authentication failed');
+            updateAdminUI();
+        }
+    } catch (error) {
+        console.error('Error verifying admin token:', error);
+        isAdminMode = false;
+        adminToken = null;
+        localStorage.removeItem('admin_token');
+        updateAdminUI();
+    }
+}
+
+function updateAdminUI() {
+    const adminButton = document.getElementById('admin-login-btn');
+    if (adminButton) {
+        adminButton.innerHTML = isAdminMode ? '<i class="fas fa-user-shield mr-1"></i> Admin' : '<i class="fas fa-key mr-1"></i> Admin Login';
+        adminButton.onclick = isAdminMode ? showAdminPanel : showAdminLogin;
+    }
+    
+    // Update package cards with admin buttons
+    if (isAdminMode && document.getElementById('packages-grid')) {
+        addAdminButtonsToPackages();
+    }
+}
+
+function initializeAdminPanel() {
+    if (!isAdminMode) return;
+    
+    // Add admin control panel
+    const adminPanel = document.createElement('div');
+    adminPanel.id = 'admin-panel';
+    adminPanel.className = 'fixed top-32 right-4 z-40 bg-white border border-gray-300 rounded-lg shadow-lg p-4 w-64';
+    adminPanel.style.display = 'none';
+    adminPanel.innerHTML = `
+        <h3 class="text-lg font-bold mb-3 text-gray-900">Admin Panel</h3>
+        <div class="space-y-2">
+            <button onclick="triggerAllBuildsCheck()" class="w-full px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors text-sm">
+                <i class="fas fa-search mr-2"></i>Check Stalled Builds
+            </button>
+            <button onclick="showSystemStatus()" class="w-full px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-sm">
+                <i class="fas fa-info-circle mr-2"></i>System Status
+            </button>
+            <button onclick="logoutAdmin()" class="w-full px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors text-sm">
+                <i class="fas fa-sign-out-alt mr-2"></i>Logout
+            </button>
+        </div>
+    `;
+    
+    document.body.appendChild(adminPanel);
+}
+
+function showAdminPanel() {
+    const panel = document.getElementById('admin-panel');
+    if (panel) {
+        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+function addAdminButtonsToPackages() {
+    const packageCards = document.querySelectorAll('[data-name]');
+    packageCards.forEach(card => {
+        const packageName = card.getAttribute('data-name');
+        const actionsDiv = card.querySelector('.p-6.flex.gap-3');
+        
+        if (actionsDiv && !actionsDiv.querySelector('.admin-trigger-btn')) {
+            const triggerBtn = document.createElement('button');
+            triggerBtn.className = 'admin-trigger-btn px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-medium';
+            triggerBtn.innerHTML = '<i class="fas fa-hammer mr-1"></i>Trigger Build';
+            triggerBtn.onclick = () => triggerPackageBuild(packageName);
+            
+            actionsDiv.appendChild(triggerBtn);
+        }
+    });
+}
+
+async function triggerPackageBuild(packageName) {
+    if (!adminToken) {
+        alert('Admin authentication required');
+        return;
+    }
+    
+    const confirmed = confirm(`Trigger build for package "${packageName}"?`);
+    if (!confirmed) return;
+    
+    try {
+        const response = await fetch('/admin/trigger-build', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${adminToken}`
+            },
+            body: JSON.stringify({
+                package_name: packageName
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            alert(`Build triggered successfully for ${packageName}`);
+            console.log('Build trigger result:', result);
+        } else {
+            alert(`Failed to trigger build: ${result.error}`);
+            console.error('Build trigger error:', result);
+        }
+    } catch (error) {
+        console.error('Error triggering build:', error);
+        alert('Failed to trigger build. Please try again.');
+    }
+}
+
+async function triggerAllBuildsCheck() {
+    if (!adminToken) {
+        alert('Admin authentication required');
+        return;
+    }
+    
+    const confirmed = confirm('Check for stalled builds and restart them?');
+    if (!confirmed) return;
+    
+    try {
+        const response = await fetch('/admin/check-builds', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${adminToken}`
+            }
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            alert('Build health check completed successfully');
+            console.log('Build check result:', result);
+        } else {
+            alert(`Failed to check builds: ${result.error}`);
+            console.error('Build check error:', result);
+        }
+    } catch (error) {
+        console.error('Error checking builds:', error);
+        alert('Failed to check builds. Please try again.');
+    }
+}
+
+async function showSystemStatus() {
+    if (!adminToken) {
+        alert('Admin authentication required');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/admin/status', {
+            headers: {
+                'Authorization': `Bearer ${adminToken}`
+            }
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            const status = `
+System Status:
+- Docker Available: ${result.system.docker_available}
+- Cron System Running: ${result.system.cron_system_running}
+- Runtime Available: ${result.system.runtime_available}
+
+Statistics:
+- Total Packages: ${result.statistics.total_packages}
+- Successful Builds: ${result.statistics.successful_builds}
+- Failed Builds: ${result.statistics.failed_builds}
+- Pending Builds: ${result.statistics.pending_builds}
+- Total Builds: ${result.statistics.total_builds}
+            `;
+            alert(status);
+            console.log('System status:', result);
+        } else {
+            alert(`Failed to get system status: ${result.error}`);
+            console.error('System status error:', result);
+        }
+    } catch (error) {
+        console.error('Error getting system status:', error);
+        alert('Failed to get system status. Please try again.');
+    }
+}
+
+function logoutAdmin() {
+    const confirmed = confirm('Logout from admin mode?');
+    if (confirmed) {
+        isAdminMode = false;
+        adminToken = null;
+        localStorage.removeItem('admin_token');
+        updateAdminUI();
+        
+        // Remove admin panel
+        const panel = document.getElementById('admin-panel');
+        if (panel) {
+            panel.remove();
+        }
+        
+        // Remove admin buttons from packages
+        document.querySelectorAll('.admin-trigger-btn').forEach(btn => btn.remove());
+        
+        alert('Logged out from admin mode');
     }
 }

@@ -1,0 +1,45 @@
+# Git and version control
+.git/
+.gitignore
+
+# Build artifacts
+zig-out/
+.zig-cache/
+zig_pkg_checker.db
+packages.db
+
+# Documentation and development files
+README.md
+FEATURES.md
+bug.md
+TARDY_INTEGRATION.md
+.cursorrules
+
+# Development scripts
+Makefile
+build_docker_images.sh
+test_docker_build.sh
+docker-compose.yml
+
+# Deployment files (will be copied separately)
+deploy.sh
+build-and-run.sh
+docker-compose.prod.yml
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/ 

@@ -130,3 +130,4 @@ A comprehensive feature overview showing what's implemented and what's planned f
 
 [x] Don't allow to submit repository that is not zig
 [x] Add build results page and functionality for that
+[x] Add cron-like job to check if some build wasn't running and run them, also add a button to run a build manually only if user is admin by token auth, generate just one stub token plus run check for each packages each day because some repositories could be updated
