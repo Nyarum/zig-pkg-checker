@@ -10,80 +10,67 @@
 
 <div class="container mx-auto px-4 py-16">
     <div class="max-w-2xl mx-auto">
+        <!-- Error display area -->
+        <div id="error-message" class="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 hidden">
+            <div class="flex items-start">
+                <i class="fas fa-exclamation-triangle text-red-500 mr-2 mt-1"></i>
+                <div>
+                    <h4 class="font-semibold">Error</h4>
+                    <p id="error-text" class="mt-1"></p>
+                </div>
+                <button id="error-close" class="ml-auto text-red-400 hover:text-red-600">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+
         <form id="submit-form" method="post" action="/submit" class="bg-white p-8 rounded-lg shadow-lg">
             <div class="mb-6">
-                <label for="package-name" class="block text-sm font-bold text-gray-700 mb-2">
-                    Package Name *
-                </label>
-                <input 
-                    type="text" 
-                    id="package-name" 
-                    name="name" 
-                    required
-                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zig-orange"
-                    placeholder="my-awesome-package"
-                >
-            </div>
-
-            <div class="mb-6">
                 <label for="package-url" class="block text-sm font-bold text-gray-700 mb-2">
-                    Repository URL *
+                    GitHub Repository URL *
                 </label>
                 <input 
                     type="url" 
                     id="package-url" 
                     name="url" 
                     required
+                    pattern="https://github\.com/[^/]+/[^/]+"
                     class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zig-orange"
-                    placeholder="https://github.com/username/repo"
+                    placeholder="https://github.com/username/repository"
                 >
+                <p class="text-sm text-gray-500 mt-1">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    Package information will be automatically fetched from the repository
+                </p>
             </div>
 
-            <div class="mb-6">
-                <label for="package-description" class="block text-sm font-bold text-gray-700 mb-2">
-                    Description *
-                </label>
-                <textarea 
-                    id="package-description" 
-                    name="description" 
-                    required
-                    rows="3"
-                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zig-orange"
-                    placeholder="A brief description of what your package does..."
-                ></textarea>
-            </div>
-
-            <div class="mb-6">
-                <label for="package-author" class="block text-sm font-bold text-gray-700 mb-2">
-                    Author *
-                </label>
-                <input 
-                    type="text" 
-                    id="package-author" 
-                    name="author" 
-                    required
-                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zig-orange"
-                    placeholder="Your name or username"
-                >
-            </div>
-
-            <div class="mb-6">
-                <label for="package-license" class="block text-sm font-bold text-gray-700 mb-2">
-                    License
-                </label>
-                <select 
-                    id="package-license" 
-                    name="license"
-                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zig-orange"
-                >
-                    <option value="">Select a license</option>
-                    <option value="MIT">MIT</option>
-                    <option value="Apache-2.0">Apache 2.0</option>
-                    <option value="GPL-3.0">GPL 3.0</option>
-                    <option value="BSD-3-Clause">BSD 3-Clause</option>
-                    <option value="LGPL-3.0">LGPL 3.0</option>
-                    <option value="Other">Other</option>
-                </select>
+            <!-- Preview section that will be populated via JavaScript -->
+            <div id="repo-preview" class="mb-6 hidden">
+                <h3 class="text-lg font-semibold text-gray-700 mb-3">Repository Preview</h3>
+                <div class="bg-gray-50 p-4 rounded-lg">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <strong class="text-gray-600">Name:</strong>
+                            <span id="preview-name" class="ml-2 text-gray-800">-</span>
+                        </div>
+                        <div>
+                            <strong class="text-gray-600">Author:</strong>
+                            <span id="preview-author" class="ml-2 text-gray-800">-</span>
+                        </div>
+                        <div class="md:col-span-2">
+                            <strong class="text-gray-600">Description:</strong>
+                            <span id="preview-description" class="ml-2 text-gray-800">-</span>
+                        </div>
+                        <div>
+                            <strong class="text-gray-600">License:</strong>
+                            <span id="preview-license" class="ml-2 text-gray-800">-</span>
+                        </div>
+                        <div>
+                            <strong class="text-gray-600">Language:</strong>
+                            <span id="preview-language" class="ml-2 text-gray-800">-</span>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="mb-6">
@@ -103,17 +90,21 @@
 
             <div class="flex gap-4">
                 <button 
+                    type="button"
+                    id="preview-btn"
+                    class="flex-1 bg-blue-600 text-white py-3 px-6 rounded-lg font-semibold hover:bg-blue-700 transition"
+                >
+                    <i class="fas fa-eye mr-2"></i>
+                    Preview Repository
+                </button>
+                <button 
                     type="submit" 
-                    class="flex-1 bg-zig-orange text-white py-3 px-6 rounded-lg font-semibold hover:bg-orange-600 transition"
+                    id="submit-btn"
+                    disabled
+                    class="flex-1 bg-zig-orange text-white py-3 px-6 rounded-lg font-semibold hover:bg-orange-600 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
                 >
                     <i class="fas fa-rocket mr-2"></i>
                     Submit Package
-                </button>
-                <button 
-                    type="reset" 
-                    class="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
-                >
-                    Reset Form
                 </button>
             </div>
         </form>
@@ -124,6 +115,10 @@
                 What happens next?
             </h3>
             <ul class="text-blue-700 space-y-2">
+                <li class="flex items-start">
+                    <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
+                    Repository information will be automatically fetched from GitHub
+                </li>
                 <li class="flex items-start">
                     <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
                     Your package will be queued for testing across multiple Zig versions
@@ -142,5 +137,177 @@
                 </li>
             </ul>
         </div>
+
+        <div class="mt-8 bg-green-50 p-6 rounded-lg">
+            <h3 class="text-lg font-bold text-green-800 mb-3">
+                <i class="fas fa-lightbulb mr-2"></i>
+                Requirements
+            </h3>
+            <ul class="text-green-700 space-y-2">
+                <li class="flex items-start">
+                    <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
+                    Repository must be public on GitHub
+                </li>
+                <li class="flex items-start">
+                    <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
+                    Must contain a valid <code class="bg-green-100 px-1 rounded">build.zig</code> file
+                </li>
+                <li class="flex items-start">
+                    <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
+                    Written primarily in Zig language
+                </li>
+                <li class="flex items-start">
+                    <i class="fas fa-info text-blue-600 mr-2 mt-1"></i>
+                    License information will be detected automatically if available
+                </li>
+            </ul>
+        </div>
     </div>
-</div> 
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const urlInput = document.getElementById('package-url');
+    const previewBtn = document.getElementById('preview-btn');
+    const submitBtn = document.getElementById('submit-btn');
+    const repoPreview = document.getElementById('repo-preview');
+    const form = document.getElementById('submit-form');
+    const errorMessage = document.getElementById('error-message');
+    const errorText = document.getElementById('error-text');
+    const errorClose = document.getElementById('error-close');
+    
+    let repositoryData = null;
+
+    // Error display functions
+    function showError(message) {
+        errorText.textContent = message;
+        errorMessage.classList.remove('hidden');
+        // Scroll to top to show error
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function hideError() {
+        errorMessage.classList.add('hidden');
+    }
+
+    // Close error message when X is clicked
+    errorClose.addEventListener('click', hideError);
+
+    previewBtn.addEventListener('click', async function() {
+        hideError(); // Clear any previous errors
+        
+        const url = urlInput.value.trim();
+        if (!url) {
+            showError('Please enter a GitHub repository URL');
+            return;
+        }
+
+        // Validate GitHub URL format
+        const githubPattern = /^https:\/\/github\.com\/([^\/]+)\/([^\/]+)\/?$/;
+        const match = url.match(githubPattern);
+        if (!match) {
+            showError('Please enter a valid GitHub repository URL (e.g., https://github.com/username/repository)');
+            return;
+        }
+
+        previewBtn.disabled = true;
+        previewBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Loading...';
+
+        try {
+            // Call our backend API to fetch repository info
+            const response = await fetch('/api/github-info', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ url: url })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to fetch repository information');
+            }
+
+            repositoryData = await response.json();
+            
+            // Populate preview
+            document.getElementById('preview-name').textContent = repositoryData.name || 'N/A';
+            document.getElementById('preview-author').textContent = repositoryData.author || 'N/A';
+            document.getElementById('preview-description').textContent = repositoryData.description || 'No description available';
+            document.getElementById('preview-license').textContent = repositoryData.license || 'No license detected';
+            document.getElementById('preview-language').textContent = repositoryData.language || 'N/A';
+
+            repoPreview.classList.remove('hidden');
+            submitBtn.disabled = false;
+
+        } catch (error) {
+            showError('Error fetching repository information: ' + error.message);
+            repositoryData = null;
+            repoPreview.classList.add('hidden');
+            submitBtn.disabled = true;
+        } finally {
+            previewBtn.disabled = false;
+            previewBtn.innerHTML = '<i class="fas fa-eye mr-2"></i>Preview Repository';
+        }
+    });
+
+    // Handle form submission
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault(); // Prevent default form submission
+        hideError(); // Clear any previous errors
+        
+        const url = urlInput.value.trim();
+        const agreeTerms = document.getElementById('agree-terms').checked;
+        
+        if (!url || !agreeTerms) {
+            showError('Please fill in all required fields and agree to the terms');
+            return;
+        }
+        
+        if (!repositoryData) {
+            showError('Please preview the repository first');
+            return;
+        }
+
+        // Show loading state
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Submitting...';
+        previewBtn.disabled = true;
+
+        try {
+            const response = await fetch('/submit', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                    url: url
+                })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText || 'Failed to submit package');
+            }
+
+            // Success - redirect to packages page
+            window.location.href = '/packages';
+
+        } catch (error) {
+            showError('Error submitting package: ' + error.message);
+            
+            // Reset button states on error
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-rocket mr-2"></i>Submit Package';
+            previewBtn.disabled = false;
+        }
+    });
+
+    // Re-disable submit button when URL changes
+    urlInput.addEventListener('input', function() {
+        hideError(); // Clear errors when user starts typing
+        submitBtn.disabled = true;
+        repoPreview.classList.add('hidden');
+        repositoryData = null;
+    });
+});
+</script> 

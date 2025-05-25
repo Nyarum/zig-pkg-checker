@@ -1,5 +1,17 @@
 .PHONY: build run test clean docker-build docker-clean setup
 
+# Detect current platform for Docker builds
+ARCH := $(shell uname -m)
+ifeq ($(ARCH),arm64)
+    PLATFORM := linux/arm64
+else ifeq ($(ARCH),aarch64)
+    PLATFORM := linux/arm64
+else ifeq ($(ARCH),x86_64)
+    PLATFORM := linux/amd64
+else
+    PLATFORM := linux/amd64
+endif
+
 # Default target
 build:
 	zig build
@@ -19,10 +31,11 @@ clean:
 # Build all Docker images for different Zig versions
 docker-build:
 	@echo "Building Docker images for all Zig versions..."
-	docker build -t zig-checker:master docker/zig-master/
-	docker build -t zig-checker:0.14.0 docker/zig-0.14.0/
-	docker build -t zig-checker:0.13.0 docker/zig-0.13.0/
-	docker build -t zig-checker:0.12.0 docker/zig-0.12.0/
+	@echo "Detected platform: $(PLATFORM)"
+	docker build --platform $(PLATFORM) -t zig-checker:master docker/zig-master/
+	docker build --platform $(PLATFORM) -t zig-checker:0.14.0 docker/zig-0.14.0/
+	docker build --platform $(PLATFORM) -t zig-checker:0.13.0 docker/zig-0.13.0/
+	docker build --platform $(PLATFORM) -t zig-checker:0.12.0 docker/zig-0.12.0/
 	@echo "All Docker images built successfully!"
 
 # Build Docker images using docker-compose (alternative method)

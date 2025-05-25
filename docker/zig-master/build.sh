@@ -2,11 +2,29 @@
 
 set -e
 
+# Enable bash debug mode for more detailed script execution logging
+set -x
+
 # Install jq if not available (for JSON processing)
 if ! command -v jq &> /dev/null; then
     echo "Installing jq for JSON processing..."
-    apt-get update && apt-get install -y jq
+    apk add --no-cache jq
 fi
+
+
+# Debug: Show initial environment
+echo "=== DEBUG: Initial Environment ==="
+echo "PWD: $(pwd)"
+echo "USER: $(whoami)"
+echo "HOME: $HOME"
+echo "PATH: $PATH"
+echo "Architecture: $(uname -m)"
+echo "OS: $(uname -a)"
+echo "Available disk space:"
+df -h
+echo "Available memory:"
+free -h 2>/dev/null || cat /proc/meminfo | head -5
+echo "====================================="
 
 # Get environment variables
 REPO_URL="${REPO_URL:-}"
@@ -19,6 +37,17 @@ if [ -z "$REPO_URL" ]; then
     exit 1
 fi
 
+# Debug: Show all relevant environment variables
+echo "=== DEBUG: Build Environment Variables ==="
+echo "REPO_URL: $REPO_URL"
+echo "PACKAGE_NAME: $PACKAGE_NAME"
+echo "BUILD_ID: $BUILD_ID"
+echo "RESULT_FILE: $RESULT_FILE"
+echo "ZIG_NO_LIB_DIR_CHECK: $ZIG_NO_LIB_DIR_CHECK"
+echo "ZIG_GLOBAL_CACHE_DIR: $ZIG_GLOBAL_CACHE_DIR"
+echo "NO_COLOR: $NO_COLOR"
+echo "==============================================="
+
 # Initialize result object
 ZIG_VERSION=$(zig version)
 START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -26,6 +55,16 @@ START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 echo "Build started for $PACKAGE_NAME (ID: $BUILD_ID)"
 echo "Zig version: $ZIG_VERSION"
 echo "Repository: $REPO_URL"
+
+# Debug: Show zig installation details
+echo "=== DEBUG: Zig Installation Details ==="
+echo "Zig executable path: $(which zig)"
+echo "Zig version details: $(zig version)"
+echo "Zig env info:"
+zig env 2>&1 || echo "zig env command failed"
+echo "Zig cache directory:"
+ls -la "$ZIG_GLOBAL_CACHE_DIR" 2>/dev/null || echo "Cache directory not yet created"
+echo "==========================================="
 
 # Create result JSON structure
 cat > "$RESULT_FILE" << EOF
@@ -69,9 +108,14 @@ EOF
 
 # Cleanup function
 cleanup() {
+    echo "=== DEBUG: Cleanup function called ==="
+    echo "Current directory: $(pwd)"
+    echo "Workspace contents before cleanup:"
+    ls -la /workspace/ 2>/dev/null || echo "No workspace directory"
     echo "Cleaning up..."
     cd /
     rm -rf /workspace/*
+    echo "=== DEBUG: Cleanup completed ==="
 }
 
 trap cleanup EXIT
@@ -80,15 +124,33 @@ BUILD_LOG=""
 ERROR_LOG=""
 
 try_build() {
+    echo "=== DEBUG: Starting build process ==="
+    echo "Current directory: $(pwd)"
+    echo "Directory contents:"
+    ls -la
+    
     echo "Cloning repository..."
     
+    # Debug: Show git configuration
+    echo "=== DEBUG: Git Configuration ==="
+    git --version
+    git config --list || echo "No git config found"
+    echo "=============================="
+    
     # Clone the repository with timeout
-    timeout 300s git clone --depth 1 "$REPO_URL" package 2>&1 | tee -a clone.log || {
+    echo "=== DEBUG: Starting git clone ==="
+    timeout 300s git clone --depth 1 --verbose "$REPO_URL" package 2>&1 | tee -a clone.log || {
         ERROR_LOG="Failed to clone repository: $(cat clone.log)"
         update_result "failed" "null" "$ERROR_LOG" "$BUILD_LOG"
-        echo "Clone failed"
+        echo "=== DEBUG: Clone failed ==="
+        cat clone.log
+        echo "========================="
         return 1
     }
+    
+    echo "=== DEBUG: Clone completed, examining repository ==="
+    ls -la package/
+    echo "====================================================="
     
     cd package
     
@@ -96,36 +158,187 @@ try_build() {
     if [ ! -f "build.zig" ]; then
         ERROR_LOG="No build.zig file found in repository"
         update_result "failed" "null" "$ERROR_LOG" "$BUILD_LOG"
-        echo "No build.zig found"
+        echo "=== DEBUG: No build.zig found ==="
+        echo "Files in repository root:"
+        ls -la
+        echo "============================="
         return 1
     fi
     
+    # Debug: Examine build.zig content
+    echo "=== DEBUG: Examining build.zig ==="
+    echo "build.zig size: $(wc -l build.zig)"
+    echo "First 20 lines of build.zig:"
+    head -20 build.zig
+    echo "==============================="
+    
+    # Debug: Check for zig.zon file
+    if [ -f "build.zig.zon" ]; then
+        echo "=== DEBUG: Found build.zig.zon ==="
+        echo "build.zig.zon content:"
+        cat build.zig.zon
+        echo "==========================="
+    fi
+
     echo "Running zig build..."
     
-    # Try to build with timeout
-    BUILD_EXIT_CODE=0
-    timeout 600s zig build 2>&1 | tee build.log || BUILD_EXIT_CODE=$?
+    # Try building with retry mechanism to handle cache/network issues
+    BUILD_ATTEMPTS=0
+    MAX_ATTEMPTS=3
+    BUILD_SUCCESS=false
     
-    BUILD_LOG=$(cat build.log)
+    # First attempt
+    echo "=== DEBUG: Build attempt 1/3 ==="
+    timeout 600s zig build --summary all --verbose 2>&1 | tee build.log
+    ZIG_EXIT_CODE=${PIPESTATUS[0]}
     
-    # Check for compilation errors in the build log, even if exit code was 0
-    if [ $BUILD_EXIT_CODE -ne 0 ] || grep -q "error:" build.log || grep -q "@compileError" build.log || grep -q "build failed" build.log; then
+    if [ $ZIG_EXIT_CODE -eq 0 ]; then
+        BUILD_SUCCESS=true
+        echo "Build succeeded on first attempt"
+    else
+        echo "First build attempt failed with exit code: $ZIG_EXIT_CODE"
+        
+        # Check if this is a cache-related error and clear cache if needed
+        if grep -q "failed to check cache" build.log || grep -q "file_hash FileNotFound" build.log; then
+            echo "Cache error detected, clearing cache before retry..."
+            rm -rf "$ZIG_GLOBAL_CACHE_DIR" || true
+            rm -rf zig-cache || true
+            mkdir -p "$ZIG_GLOBAL_CACHE_DIR" || true
+        fi
+        
+        # Second attempt
+        echo "=== DEBUG: Build attempt 2/3 ==="
+        timeout 600s zig build --summary all --verbose 2>&1 | tee build.log
+        ZIG_EXIT_CODE=${PIPESTATUS[0]}
+        
+        if [ $ZIG_EXIT_CODE -eq 0 ]; then
+            BUILD_SUCCESS=true
+            echo "Build succeeded on second attempt"
+        else
+            echo "Second build attempt failed with exit code: $ZIG_EXIT_CODE"
+            
+            # If still failing with cache errors, try one more time with cache cleared
+            if grep -q "failed to check cache" build.log || grep -q "file_hash FileNotFound" build.log; then
+                echo "Cache error detected again, clearing cache completely..."
+                rm -rf "$ZIG_GLOBAL_CACHE_DIR" || true
+                rm -rf zig-cache || true
+                mkdir -p "$ZIG_GLOBAL_CACHE_DIR" || true
+            fi
+            
+            # Third attempt
+            echo "=== DEBUG: Build attempt 3/3 ==="
+            timeout 600s zig build --summary all --verbose 2>&1 | tee build.log
+            ZIG_EXIT_CODE=${PIPESTATUS[0]}
+            
+            if [ $ZIG_EXIT_CODE -eq 0 ]; then
+                BUILD_SUCCESS=true
+                echo "Build succeeded on third attempt"
+            else
+                BUILD_EXIT_CODE=$ZIG_EXIT_CODE
+                echo "All build attempts failed"
+            fi
+        fi
+    fi
+    
+    if [ "$BUILD_SUCCESS" = false ]; then
+        BUILD_EXIT_CODE=1
+        BUILD_LOG=$(cat build.log 2>/dev/null || echo "No build log available")
+    else
+        BUILD_EXIT_CODE=0
+        BUILD_LOG=$(cat build.log 2>/dev/null || echo "Build successful")
+    fi
+    
+    # Debug: Pre-build state
+    echo "=== DEBUG: Pre-build State ==="
+    echo "Current directory: $(pwd)"
+    echo "Available targets:"
+    timeout 30s zig build --help 2>&1 | grep -A 20 "Steps:" || echo "Could not get build targets"
+    echo "Cache state:"
+    ls -la "$ZIG_GLOBAL_CACHE_DIR" 2>/dev/null || echo "Cache directory doesn't exist yet"
+    echo "=========================="
+
+    
+    # Enhanced error detection: Check both exit code and build log content
+    BUILD_FAILED=false
+    
+    # Check exit code first
+    if [ $BUILD_EXIT_CODE -ne 0 ]; then
+        BUILD_FAILED=true
+        echo "Build failed with exit code: $BUILD_EXIT_CODE"
+    fi
+    
+    # Check for various error patterns in build log, even if exit code was 0
+    # But exclude cache-related errors that can be retried
+    if grep -q "error:" build.log && ! grep -q "failed to check cache" build.log; then
+        BUILD_FAILED=true
+        echo "Found 'error:' in build log"
+    elif grep -q "failed to check cache" build.log; then
+        echo "Found cache error - this can be retried"
+        BUILD_FAILED=true
+    fi
+    
+    if grep -q "Build Summary:.*failed" build.log; then
+        BUILD_FAILED=true
+        echo "Found build failures in Build Summary"
+    fi
+    
+    if grep -q "the following build command failed with exit code" build.log; then
+        BUILD_FAILED=true
+        echo "Found build command failure in log"
+    fi
+    
+    if grep -q "the following command terminated unexpectedly" build.log; then
+        BUILD_FAILED=true
+        echo "Found unexpected command termination in log"
+    fi
+    
+    if grep -q "build.zig.zon:.*error:" build.log; then
+        BUILD_FAILED=true
+        echo "Found build.zig.zon syntax error"
+    fi
+    
+    if grep -q "@compileError" build.log; then
+        BUILD_FAILED=true
+        echo "Found compile error directive"
+    fi
+    
+    # Count the number of error occurrences - many errors usually indicate failure
+    ERROR_COUNT=$(grep -c "error:" build.log 2>/dev/null || echo "0")
+    if [ "$ERROR_COUNT" -ge 2 ]; then
+        BUILD_FAILED=true
+        echo "Found $ERROR_COUNT errors in build log"
+    fi
+    
+    if [ "$BUILD_FAILED" = true ]; then
         ERROR_LOG="Build failed: $BUILD_LOG"
         update_result "failed" "null" "$ERROR_LOG" "$BUILD_LOG"
-        echo "Build failed (exit code: $BUILD_EXIT_CODE)"
+        echo "Build failed based on log analysis"
         return 1
     fi
     
     echo "Build successful!"
     
+    # Debug: Pre-test state
+    echo "=== DEBUG: Pre-test State ==="
+    echo "Checking for test targets:"
+    timeout 30s zig build --help 2>&1 | grep -i test || echo "No test-related targets found"
+    echo "========================"
+    
     # Try to run tests if they exist
     echo "Running tests..."
     TEST_STATUS="null"
     
-    timeout 300s zig build test 2>&1 | tee test.log && {
+    echo "=== DEBUG: Starting zig build test ==="
+    timeout 300s zig build test --summary all --verbose 2>&1 | tee test.log && {
         TEST_STATUS='"success"'
         echo "Tests passed!"
     } || {
+        # Debug: Analyze test failure
+        echo "=== DEBUG: Test Log Analysis ==="
+        echo "Test log content:"
+        cat test.log
+        echo "=========================="
+        
         # Check if tests actually exist or if it's just no tests defined
         if grep -q "no tests to run" test.log; then
             TEST_STATUS='"no_tests"'
@@ -146,5 +359,7 @@ try_build() {
 # Run the build
 try_build
 
+echo "=== DEBUG: Final Result ==="
 echo "Build process completed. Result saved to $RESULT_FILE"
 cat "$RESULT_FILE" 
+echo "=========================" 

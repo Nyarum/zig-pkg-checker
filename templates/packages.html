@@ -8,101 +8,97 @@
     </div>
 </div>
 
-<div class="container mx-auto px-4 py-16">
-    <div class="text-center">
-        <i class="fas fa-box-open text-6xl text-gray-400 mb-6"></i>
-        <h3 class="text-2xl font-bold text-gray-800 mb-2">No packages yet</h3>
-        <p class="text-gray-600 mb-6">Be the first to submit a package for testing!</p>
-        <a href="/api/packages" class="bg-zig-orange text-white px-6 py-3 rounded-lg font-semibold hover:bg-orange-600 transition">View API</a>
-    </div>
-</div>
-
-<div class="container">
-    <div class="packages-toolbar">
-        <div class="search-box">
-            <input type="text" id="package-search" placeholder="Search packages..." class="search-input">
-            <i class="fas fa-search search-icon"></i>
-        </div>
-        <div class="filters">
-            <select id="version-filter" class="filter-select">
-                <option value="">All Zig Versions</option>
-                <option value="master">Master</option>
-                <option value="0.14.0">0.14.0 (Stable)</option>
-                <option value="0.13.0">0.13.0</option>
-                <option value="0.12.0">0.12.0</option>
-            </select>
-            <select id="status-filter" class="filter-select">
-                <option value="">All Statuses</option>
-                <option value="success">✅ Working</option>
-                <option value="failed">❌ Failing</option>
-                <option value="pending">⏳ Pending</option>
-            </select>
-            <select id="sort-filter" class="filter-select">
-                <option value="name">Sort by Name</option>
-                <option value="updated">Recently Updated</option>
-                <option value="popularity">Popularity</option>
-                <option value="compatibility">Compatibility</option>
-            </select>
+<div class="container mx-auto px-4 py-8">
+    <!-- Search and Filter Toolbar -->
+    <div class="mb-8 bg-white rounded-lg shadow-sm border p-6">
+        <div class="flex flex-col lg:flex-row gap-4 items-center">
+            <div class="relative flex-1 min-w-0">
+                <input type="text" id="package-search" placeholder="Search packages..." 
+                       class="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-zig-orange focus:border-transparent outline-none">
+                <i class="fas fa-search absolute left-3 top-3 text-gray-400"></i>
+            </div>
+            <div class="flex flex-col sm:flex-row gap-4">
+                <select id="version-filter" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-zig-orange focus:border-transparent outline-none bg-white">
+                    <option value="">All Zig Versions</option>
+                    <option value="master">Master</option>
+                    <option value="0.14.0">0.14.0 (Stable)</option>
+                    <option value="0.13.0">0.13.0</option>
+                    <option value="0.12.0">0.12.0</option>
+                </select>
+                <select id="status-filter" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-zig-orange focus:border-transparent outline-none bg-white">
+                    <option value="">All Statuses</option>
+                    <option value="success">✅ Working</option>
+                    <option value="failed">❌ Failing</option>
+                    <option value="pending">⏳ Pending</option>
+                </select>
+                <select id="sort-filter" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-zig-orange focus:border-transparent outline-none bg-white">
+                    <option value="name">Sort by Name</option>
+                    <option value="updated">Recently Updated</option>
+                    <option value="popularity">Popularity</option>
+                    <option value="compatibility">Compatibility</option>
+                </select>
+            </div>
         </div>
     </div>
 
-    <div class="packages-grid" id="packages-grid">
+    <!-- Packages Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="packages-grid">
         {{#each packages}}
-        <div class="package-card" data-name="{{name}}" data-author="{{author}}">
-            <div class="package-header">
-                <h3 class="package-name">
-                    <a href="/packages/{{name}}">{{name}}</a>
+        <div class="bg-white rounded-lg shadow-md border border-gray-200 overflow-hidden hover:shadow-lg transition-shadow duration-200" data-name="{{name}}" data-author="{{author}}">
+            <!-- Package Header -->
+            <div class="p-6 border-b border-gray-100">
+                <h3 class="text-xl font-bold text-gray-900 mb-2">
+                    <a href="/packages/{{name}}" class="hover:text-zig-orange transition-colors">{{name}}</a>
                 </h3>
-                <div class="package-meta">
-                    <span class="package-author">
+                <div class="flex items-center gap-4 text-sm text-gray-600">
+                    <span class="flex items-center gap-1">
                         <i class="fas fa-user"></i>
                         {{author}}
                     </span>
-                    <span class="package-updated">
+                    <span class="flex items-center gap-1">
                         <i class="fas fa-clock"></i>
                         {{last_updated}}
                     </span>
                 </div>
             </div>
             
-            <div class="package-description">
-                {{description}}
+            <!-- Package Description -->
+            <div class="p-6 border-b border-gray-100">
+                <p class="text-gray-700 leading-relaxed">{{description}}</p>
             </div>
 
-            <div class="package-compatibility">
-                <h4>Compatibility Matrix</h4>
-                <div class="compatibility-grid">
+            <!-- Compatibility Matrix -->
+            <div class="p-6 border-b border-gray-100">
+                <h4 class="text-lg font-semibold text-gray-900 mb-3">Compatibility Matrix</h4>
+                <div class="grid grid-cols-2 gap-2">
                     {{#each build_results}}
-                    <div class="compat-item">
-                        <span class="zig-version">{{zig_version}}</span>
-                        <span class="build-status status-{{build_status}}">
-                            {{#if (eq build_status 'success')}}
-                                <i class="fas fa-check"></i>
-                            {{else if (eq build_status 'failed')}}
-                                <i class="fas fa-times"></i>
-                            {{else}}
-                                <i class="fas fa-clock"></i>
-                            {{/if}}
+                    <div class="flex items-center justify-between p-2 bg-gray-50 rounded">
+                        <span class="text-sm font-medium text-gray-700">{{zig_version}}</span>
+                        <span class="flex items-center justify-center w-6 h-6 rounded-full status-{{build_status}}">
+                            <i class="text-xs status-icon-{{build_status}}"></i>
                         </span>
                     </div>
                     {{/each}}
                 </div>
             </div>
 
-            <div class="package-actions">
-                <a href="{{url}}" class="btn btn-sm btn-outline" target="_blank">
-                    <i class="fas fa-external-link-alt"></i>
+            <!-- Package Actions -->
+            <div class="p-6 flex gap-3">
+                <a href="{{url}}" class="flex-1 text-center px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium" target="_blank">
+                    <i class="fas fa-external-link-alt mr-2"></i>
                     Repository
                 </a>
-                <a href="/packages/{{name}}" class="btn btn-sm btn-primary">
+                <a href="/packages/{{name}}" class="flex-1 text-center px-4 py-2 bg-zig-orange text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium">
                     View Details
                 </a>
             </div>
 
             {{#if license}}
-            <div class="package-license">
-                <i class="fas fa-balance-scale"></i>
-                {{license}}
+            <div class="px-6 pb-6">
+                <div class="flex items-center gap-2 text-sm text-gray-600 bg-gray-50 p-2 rounded">
+                    <i class="fas fa-balance-scale"></i>
+                    <span>{{license}}</span>
+                </div>
             </div>
             {{/if}}
         </div>
@@ -110,15 +106,15 @@
     </div>
 
     {{#unless packages}}
-    <div class="empty-state">
-        <i class="fas fa-box-open"></i>
-        <h3>No packages found</h3>
-        <p>No packages match your current filters. Try adjusting your search criteria.</p>
-        <a href="/submit" class="btn btn-primary">Submit a Package</a>
+    <div class="text-center py-16">
+        <i class="fas fa-box-open text-6xl text-gray-400 mb-6"></i>
+        <h3 class="text-2xl font-bold text-gray-800 mb-2">No packages found</h3>
+        <p class="text-gray-600 mb-6">No packages match your current filters. Try adjusting your search criteria.</p>
+        <a href="/submit" class="inline-block bg-zig-orange text-white px-6 py-3 rounded-lg font-semibold hover:bg-orange-600 transition-colors">Submit a Package</a>
     </div>
     {{/unless}}
 
-    <div class="pagination" id="pagination">
+    <div class="mt-8 flex justify-center" id="pagination">
         <!-- Pagination will be populated by JavaScript -->
     </div>
 </div> 

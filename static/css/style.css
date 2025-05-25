@@ -385,15 +385,37 @@ body {
 }
 
 .status-success {
-    color: var(--success-color);
+    background-color: #dcfce7 !important;
+    color: #166534 !important;
 }
 
 .status-failed {
-    color: var(--danger-color);
+    background-color: #fef2f2 !important;
+    color: #dc2626 !important;
 }
 
 .status-pending {
-    color: var(--warning-color);
+    background-color: #fefce8 !important;
+    color: #ca8a04 !important;
+}
+
+/* Status icon styles */
+.status-icon-success::before {
+    content: "\f00c";
+    font-family: "Font Awesome 5 Free";
+    font-weight: 900;
+}
+
+.status-icon-failed::before {
+    content: "\f00d";
+    font-family: "Font Awesome 5 Free";
+    font-weight: 900;
+}
+
+.status-icon-pending::before {
+    content: "\f017";
+    font-family: "Font Awesome 5 Free";
+    font-weight: 900;
 }
 
 .package-actions {

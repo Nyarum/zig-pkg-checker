@@ -102,16 +102,66 @@ try_build() {
     
     echo "Running zig build..."
     
-    # Try to build with timeout
-    timeout 600s zig build 2>&1 | tee build.log || {
-        ERROR_LOG="Build failed: $(cat build.log)"
-        BUILD_LOG=$(cat build.log)
-        update_result "failed" "null" "$ERROR_LOG" "$BUILD_LOG"
-        echo "Build failed"
-        return 1
-    }
+    # Try to build with timeout - capture exit code separately
+    BUILD_EXIT_CODE=0
+    timeout 600s zig build 2>&1 | tee build.log || BUILD_EXIT_CODE=$?
     
     BUILD_LOG=$(cat build.log)
+    
+    # Enhanced error detection: Check both exit code and build log content
+    BUILD_FAILED=false
+    
+    # Check exit code first
+    if [ $BUILD_EXIT_CODE -ne 0 ]; then
+        BUILD_FAILED=true
+        echo "Build failed with exit code: $BUILD_EXIT_CODE"
+    fi
+    
+    # Check for various error patterns in build log, even if exit code was 0
+    if grep -q "error:" build.log; then
+        BUILD_FAILED=true
+        echo "Found 'error:' in build log"
+    fi
+    
+    if grep -q "Build Summary:.*failed" build.log; then
+        BUILD_FAILED=true
+        echo "Found build failures in Build Summary"
+    fi
+    
+    if grep -q "the following build command failed with exit code" build.log; then
+        BUILD_FAILED=true
+        echo "Found build command failure in log"
+    fi
+    
+    if grep -q "the following command terminated unexpectedly" build.log; then
+        BUILD_FAILED=true
+        echo "Found unexpected command termination in log"
+    fi
+    
+    if grep -q "build.zig.zon:.*error:" build.log; then
+        BUILD_FAILED=true
+        echo "Found build.zig.zon syntax error"
+    fi
+    
+    if grep -q "@compileError" build.log; then
+        BUILD_FAILED=true
+        echo "Found compile error directive"
+    fi
+    
+    # Count the number of error occurrences - many errors usually indicate failure
+    ERROR_COUNT=$(grep -c "error:" build.log 2>/dev/null || echo "0")
+    if [ "$ERROR_COUNT" -ge 2 ]; then
+        BUILD_FAILED=true
+        echo "Found $ERROR_COUNT errors in build log"
+    fi
+    
+    if [ "$BUILD_FAILED" = true ]; then
+        ERROR_LOG="Build failed: $BUILD_LOG"
+        update_result "failed" "null" "$ERROR_LOG" "$BUILD_LOG"
+        echo "Build failed based on log analysis"
+        return 1
+    fi
+    
     echo "Build successful!"
     
     # Try to run tests if they exist

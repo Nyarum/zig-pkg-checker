@@ -1,22 +1,31 @@
-FROM ubuntu:22.04
+FROM alpine:3.19
 
 # Install dependencies
-RUN apt-get update && apt-get install -y \
+RUN apk add --no-cache \
     wget \
-    xz-utils \
+    xz \
     git \
     curl \
     ca-certificates \
-    build-essential \
+    build-base \
     jq \
-    && rm -rf /var/lib/apt/lists/*
+    procps \
+    bash \
+    coreutils
 
-# Install Zig master
-RUN wget -q https://ziglang.org/builds/zig-linux-x86_64-0.15.0-dev.621+a63f7875f.tar.xz \
-    && tar -xf zig-linux-x86_64-0.15.0-dev.621+a63f7875f.tar.xz \
-    && mv zig-linux-x86_64-0.15.0-dev.621+a63f7875f /opt/zig \
+# Install Zig master with architecture detection
+ARG TARGETPLATFORM
+RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+        ARCH="aarch64"; \
+    else \
+        ARCH="x86_64"; \
+    fi && \
+    ZIG_VERSION="0.15.0-dev.621+a63f7875f" && \
+    wget -q https://ziglang.org/builds/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz \
+    && tar -xf zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz \
+    && mv zig-linux-${ARCH}-${ZIG_VERSION} /opt/zig \
     && ln -s /opt/zig/zig /usr/local/bin/zig \
-    && rm zig-linux-x86_64-0.15.0-dev.621+a63f7875f.tar.xz
+    && rm zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz
 
 # Create working directory
 WORKDIR /workspace

@@ -5,3 +5,4 @@ zig-cache/
 
 libs/*
 zig_pkg_checker.db
+*.sh

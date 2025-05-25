@@ -1,22 +1,30 @@
-FROM ubuntu:22.04
+FROM alpine:3.19
 
 # Install dependencies
-RUN apt-get update && apt-get install -y \
+RUN apk add --no-cache \
     wget \
-    xz-utils \
+    xz \
     git \
     curl \
     ca-certificates \
-    build-essential \
+    build-base \
     jq \
-    && rm -rf /var/lib/apt/lists/*
+    procps \
+    bash \
+    coreutils
 
-# Install Zig 0.14.0
-RUN wget -q https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz \
-    && tar -xf zig-linux-x86_64-0.14.0.tar.xz \
-    && mv zig-linux-x86_64-0.14.0 /opt/zig \
+# Install Zig 0.14.0 with architecture detection
+ARG TARGETPLATFORM
+RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+        ARCH="aarch64"; \
+    else \
+        ARCH="x86_64"; \
+    fi && \
+    wget -q https://ziglang.org/download/0.14.0/zig-linux-${ARCH}-0.14.0.tar.xz \
+    && tar -xf zig-linux-${ARCH}-0.14.0.tar.xz \
+    && mv zig-linux-${ARCH}-0.14.0 /opt/zig \
     && ln -s /opt/zig/zig /usr/local/bin/zig \
-    && rm zig-linux-x86_64-0.14.0.tar.xz
+    && rm zig-linux-${ARCH}-0.14.0.tar.xz
 
 # Create working directory
 WORKDIR /workspace
