@@ -41,7 +41,7 @@ ENV C_INCLUDE_PATH=/usr/include
 ENV CPATH=/usr/include
 
 # Build the application
-RUN zig build -Doptimize=ReleaseFast
+RUN zig build -Doptimize=Debug
 
 # Production stage
 FROM alpine:3.19
@@ -61,11 +61,13 @@ RUN apk add --no-cache \
 # Create app user for security and add to docker group
 RUN addgroup -g 1001 -S appgroup && \
     adduser -u 1001 -S appuser -G appgroup && \
+    addgroup -g 999 -S docker && \
     adduser appuser docker
 
 # Create necessary directories
 RUN mkdir -p /app/templates /app/static /app/docker /app/data /tmp/build_results && \
-    chown -R appuser:appgroup /app /tmp/build_results
+    chown -R appuser:appgroup /app /tmp/build_results && \
+    chmod 755 /app /tmp/build_results
 
 # Copy built application from builder stage
 COPY --from=builder /app/zig-out/bin/zig_pkg_checker /app/
@@ -80,8 +82,8 @@ RUN chown appuser:appgroup /app/zig_pkg_checker && \
 # Set working directory
 WORKDIR /app
 
-# Switch to non-root user
-USER appuser
+# Keep as root for Docker and io_uring access
+# USER appuser
 
 # Expose port
 EXPOSE 3001
