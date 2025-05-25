@@ -455,17 +455,47 @@ pub const Parser = struct {
 
         // Parse helper name and arguments
         const helper_content = start_token.content[1..]; // Remove '#'
-        var helper_parts = std.mem.splitSequence(u8, helper_content, " ");
-        const helper_name = helper_parts.next() orelse return TemplateError.SyntaxError;
 
-        // Collect arguments
+        // Find the first space to separate helper name from arguments
+        const first_space = std.mem.indexOf(u8, helper_content, " ");
+        const helper_name = if (first_space) |pos| helper_content[0..pos] else helper_content;
+
+        // Collect arguments, handling parenthesized expressions
         var args = std.ArrayList([]const u8).init(self.allocator);
         defer args.deinit();
 
-        while (helper_parts.next()) |arg| {
-            const trimmed_arg = std.mem.trim(u8, arg, " \t\n\r");
-            if (trimmed_arg.len > 0) {
-                args.append(self.allocator.dupe(u8, trimmed_arg) catch return TemplateError.OutOfMemory) catch return TemplateError.OutOfMemory;
+        if (first_space) |start_pos| {
+            const args_content = std.mem.trim(u8, helper_content[start_pos..], " \t\n\r");
+            if (args_content.len > 0) {
+                // Check if this is a parenthesized expression
+                if (args_content[0] == '(') {
+                    if (std.mem.lastIndexOf(u8, args_content, ")")) |end_paren| {
+                        // This is a single parenthesized argument
+                        const paren_arg = args_content[0 .. end_paren + 1];
+                        args.append(self.allocator.dupe(u8, paren_arg) catch return TemplateError.OutOfMemory) catch return TemplateError.OutOfMemory;
+
+                        // Check if there are more arguments after the parentheses
+                        const remaining = std.mem.trim(u8, args_content[end_paren + 1 ..], " \t\n\r");
+                        if (remaining.len > 0) {
+                            var remaining_parts = std.mem.splitSequence(u8, remaining, " ");
+                            while (remaining_parts.next()) |arg| {
+                                const trimmed_arg = std.mem.trim(u8, arg, " \t\n\r");
+                                if (trimmed_arg.len > 0) {
+                                    args.append(self.allocator.dupe(u8, trimmed_arg) catch return TemplateError.OutOfMemory) catch return TemplateError.OutOfMemory;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Regular space-separated arguments
+                    var helper_parts = std.mem.splitSequence(u8, args_content, " ");
+                    while (helper_parts.next()) |arg| {
+                        const trimmed_arg = std.mem.trim(u8, arg, " \t\n\r");
+                        if (trimmed_arg.len > 0) {
+                            args.append(self.allocator.dupe(u8, trimmed_arg) catch return TemplateError.OutOfMemory) catch return TemplateError.OutOfMemory;
+                        }
+                    }
+                }
             }
         }
 
@@ -675,10 +705,10 @@ pub const Renderer = struct {
 
     fn renderHelper(self: Self, node: ASTNode, context: Context) TemplateError![]const u8 {
         // Handle custom helpers like {{#if (eq value1 value2)}}
-        if (std.mem.eql(u8, node.content, "eq")) {
-            return self.handleEqHelper(node, context);
-        }
-
+        // The eq helper is handled in evaluateCondition, not here
+        _ = self;
+        _ = node;
+        _ = context;
         return TemplateError.UnknownHelper;
     }
 
@@ -696,15 +726,18 @@ pub const Renderer = struct {
     }
 
     fn evaluateCondition(self: Self, node: ASTNode, context: Context) TemplateError!bool {
-        _ = self;
         if (node.helper_args.len == 0) return false;
 
         // Simple variable truthiness check
         const var_name = node.helper_args[0];
 
+        std.log.debug("evaluateCondition: Evaluating condition with arg: '{s}'", .{var_name});
+
         // Handle helper function calls like (eq value1 value2)
         if (var_name.len > 2 and var_name[0] == '(' and var_name[var_name.len - 1] == ')') {
             const helper_call = var_name[1 .. var_name.len - 1];
+            std.log.debug("evaluateCondition: Found helper call: '{s}'", .{helper_call});
+
             var parts = std.mem.splitSequence(u8, helper_call, " ");
             const helper_name = parts.next() orelse return false;
 
@@ -712,14 +745,45 @@ pub const Renderer = struct {
                 const val1_name = parts.next() orelse return false;
                 const val2_name = parts.next() orelse return false;
 
+                std.log.debug("evaluateCondition: eq helper - comparing '{s}' with '{s}'", .{ val1_name, val2_name });
+
                 const val1 = context.getValue(val1_name);
                 const val2_str = std.mem.trim(u8, val2_name, "\"'");
 
+                std.log.debug("evaluateCondition: val2_str after trim: '{s}'", .{val2_str});
+
                 if (val1) |v1| {
+                    std.log.debug("evaluateCondition: val1 found, type: {s}", .{@tagName(v1)});
                     switch (v1) {
-                        .string => |s| return std.mem.eql(u8, s, val2_str),
-                        else => return false,
+                        .string => |s| {
+                            std.log.debug("evaluateCondition: Comparing strings: '{s}' == '{s}' -> {}", .{ s, val2_str, std.mem.eql(u8, s, val2_str) });
+                            return std.mem.eql(u8, s, val2_str);
+                        },
+                        .integer => |i| {
+                            // Try to parse val2_str as integer for comparison
+                            if (std.fmt.parseInt(i64, val2_str, 10)) |val2_int| {
+                                std.log.debug("evaluateCondition: Comparing integers: {} == {} -> {}", .{ i, val2_int, i == val2_int });
+                                return i == val2_int;
+                            } else |_| {
+                                // If val2_str is not a number, convert val1 to string for comparison
+                                const val1_str = std.fmt.allocPrint(self.allocator, "{d}", .{i}) catch return false;
+                                defer self.allocator.free(val1_str);
+                                std.log.debug("evaluateCondition: Comparing int as string: '{s}' == '{s}' -> {}", .{ val1_str, val2_str, std.mem.eql(u8, val1_str, val2_str) });
+                                return std.mem.eql(u8, val1_str, val2_str);
+                            }
+                        },
+                        .bool => |b| {
+                            const bool_str = if (b) "true" else "false";
+                            std.log.debug("evaluateCondition: Comparing bool as string: '{s}' == '{s}' -> {}", .{ bool_str, val2_str, std.mem.eql(u8, bool_str, val2_str) });
+                            return std.mem.eql(u8, bool_str, val2_str);
+                        },
+                        else => {
+                            std.log.debug("evaluateCondition: Unsupported type for eq comparison: {s}", .{@tagName(v1)});
+                            return false;
+                        },
                     }
+                } else {
+                    std.log.debug("evaluateCondition: val1 not found for key '{s}'", .{val1_name});
                 }
                 return false;
             }
@@ -739,13 +803,6 @@ pub const Renderer = struct {
         }
 
         return false;
-    }
-
-    fn handleEqHelper(self: Self, node: ASTNode, context: Context) TemplateError![]const u8 {
-        _ = self;
-        _ = node;
-        _ = context;
-        return TemplateError.UnknownHelper;
     }
 };
 

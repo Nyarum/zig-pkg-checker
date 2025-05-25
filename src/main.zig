@@ -109,6 +109,54 @@ const StatsPageData = struct {
     };
 };
 
+// Build Results page data structure
+const BuildResultsPageData = struct {
+    title: []const u8,
+    package_name: []const u8,
+    package_author: []const u8,
+    package_description: ?[]const u8,
+    package_license: ?[]const u8,
+    package_url: []const u8,
+    package_last_updated: []const u8,
+    successful_builds: i32,
+    failed_builds: i32,
+    pending_builds: i32,
+    total_builds: i32,
+    build_results: []BuildResultDetail,
+
+    const BuildResultDetail = struct {
+        zig_version: []const u8,
+        build_status: []const u8,
+        test_status: ?[]const u8,
+        error_log: ?[]const u8,
+        last_checked: []const u8,
+    };
+};
+
+// All Builds page data structure
+const AllBuildsPageData = struct {
+    title: []const u8,
+    successful_builds: i32,
+    failed_builds: i32,
+    pending_builds: i32,
+    total_builds: i32,
+    build_results: []AllBuildResult,
+    current_page: i32,
+    total_pages: i32,
+    page_numbers: []i32,
+
+    const AllBuildResult = struct {
+        package_name: []const u8,
+        package_author: []const u8,
+        package_description: ?[]const u8,
+        zig_version: []const u8,
+        build_status: []const u8,
+        test_status: ?[]const u8,
+        error_log: ?[]const u8,
+        last_checked: []const u8,
+    };
+};
+
 // Template rendering helpers
 fn renderTemplate(ctx: *const Context, template_name: []const u8) !Respond {
     return renderTemplateWithTitle(ctx, template_name, getPageTitle(template_name));
@@ -127,6 +175,8 @@ fn getPageTitle(template_name: []const u8) []const u8 {
     if (std.mem.eql(u8, template_name, "submit.html")) return "Submit Package";
     if (std.mem.eql(u8, template_name, "stats.html")) return "Statistics";
     if (std.mem.eql(u8, template_name, "api.html")) return "API Documentation";
+    if (std.mem.eql(u8, template_name, "build_results.html")) return "Build Results";
+    if (std.mem.eql(u8, template_name, "builds.html")) return "All Builds";
     return "Zig Package Checker";
 }
 
@@ -316,13 +366,30 @@ fn handleFormSubmission(ctx: *const Context) !Respond {
     // Fetch repository information from GitHub
     const repo_info = fetchGitHubRepoInfo(ctx.allocator, url.?) catch |err| {
         log.err("Failed to fetch GitHub repository info for {s}: {}", .{ url.?, err });
-        return ctx.response.apply(.{ .status = .@"Bad Request", .mime = http.Mime.HTML, .body = 
+
+        const error_message = switch (err) {
+            error.NotZigProject =>
+            \\<html><body>
+            \\<h1>Error: Not a Zig Project</h1>
+            \\<p>The submitted repository is not a valid Zig project. To be accepted, the repository must:</p>
+            \\<ul>
+            \\<li>Have Zig as the primary language, OR</li>
+            \\<li>Contain a <code>build.zig</code> file in the root directory</li>
+            \\</ul>
+            \\<p>Please ensure your repository is a valid Zig project before submitting.</p>
+            \\<a href="/submit">Go back</a>
+            \\</body></html>
+            ,
+            else =>
             \\<html><body>
             \\<h1>Error</h1>
             \\<p>Failed to fetch repository information from GitHub. Please ensure the URL is correct and the repository is public.</p>
             \\<a href="/submit">Go back</a>
             \\</body></html>
-        });
+            ,
+        };
+
+        return ctx.response.apply(.{ .status = .@"Bad Request", .mime = http.Mime.HTML, .body = error_message });
     };
     defer freeGitHubRepoInfo(ctx.allocator, repo_info);
 
@@ -505,6 +572,52 @@ fn api_docs_handler(ctx: *const Context, _: void) !Respond {
     return renderTemplate(ctx, "api.html");
 }
 
+fn builds_handler(ctx: *const Context, _: void) !Respond {
+    // Parse query parameters for filtering and pagination
+    const query_string = if (ctx.request.uri) |uri| blk: {
+        if (std.mem.indexOf(u8, uri, "?")) |query_start| {
+            break :blk uri[query_start + 1 ..];
+        } else {
+            break :blk "";
+        }
+    } else "";
+
+    // Extract query parameters
+    const search = extractUrlParam(ctx.allocator, query_string, "search");
+    defer if (search) |s| ctx.allocator.free(s);
+
+    const zig_version = extractUrlParam(ctx.allocator, query_string, "zig_version");
+    defer if (zig_version) |v| ctx.allocator.free(v);
+
+    const status = extractUrlParam(ctx.allocator, query_string, "status");
+    defer if (status) |s| ctx.allocator.free(s);
+
+    const sort = extractUrlParam(ctx.allocator, query_string, "sort");
+    defer if (sort) |s| ctx.allocator.free(s);
+
+    const page_str = extractUrlParam(ctx.allocator, query_string, "page");
+    defer if (page_str) |p| ctx.allocator.free(p);
+
+    const limit_str = extractUrlParam(ctx.allocator, query_string, "limit");
+    defer if (limit_str) |l| ctx.allocator.free(l);
+
+    // Parse pagination parameters
+    const page = if (page_str) |p| std.fmt.parseInt(i32, p, 10) catch 1 else 1;
+    const limit = if (limit_str) |l| std.fmt.parseInt(i32, l, 10) catch 20 else 20;
+
+    log.debug("builds_handler: search={s}, zig_version={s}, status={s}, sort={s}, page={d}, limit={d}", .{ if (search) |s| s else "null", if (zig_version) |v| v else "null", if (status) |s| s else "null", if (sort) |s| s else "null", page, limit });
+
+    // Fetch builds page data
+    const builds_data = fetchAllBuildsPageData(ctx.allocator, search, zig_version, status, sort, page, limit) catch |err| {
+        log.err("Failed to fetch builds page data: {}", .{err});
+        // Return template with basic title on error
+        return renderTemplateWithTitle(ctx, "builds.html", "All Builds");
+    };
+    defer freeAllBuildsPageData(ctx.allocator, builds_data);
+
+    return renderTemplateWithData(ctx, "builds.html", builds_data);
+}
+
 // Test handler for debugging routes
 fn test_handler(ctx: *const Context, _: void) !Respond {
     const path = ctx.request.uri orelse "/";
@@ -526,6 +639,56 @@ fn test_handler(ctx: *const Context, _: void) !Respond {
         .mime = http.Mime.JSON,
         .body = json_response,
     });
+}
+
+// Build results handler for detailed package build information
+fn build_results_handler(ctx: *const Context, _: void) !Respond {
+    // Extract package name from captured route parameter
+    const path = ctx.request.uri orelse "/";
+    log.debug("build_results_handler: Received request for path: '{s}'", .{path});
+
+    // Get package name from route parameter capture
+    if (ctx.captures.len == 0) {
+        log.err("build_results_handler: No captured parameters found in path: {s}", .{path});
+        return ctx.response.apply(.{
+            .status = .@"Bad Request",
+            .mime = http.Mime.TEXT,
+            .body = "Invalid package name in URL",
+        });
+    }
+
+    const package_name = switch (ctx.captures[0]) {
+        .string => |name| name,
+        else => {
+            log.err("build_results_handler: First capture is not a string: {s}", .{path});
+            return ctx.response.apply(.{
+                .status = .@"Bad Request",
+                .mime = http.Mime.TEXT,
+                .body = "Invalid package name in URL",
+            });
+        },
+    };
+
+    log.debug("build_results_handler: Extracted package name: '{s}'", .{package_name});
+
+    // Fetch build results data for the package
+    const build_data = fetchBuildResultsPageData(ctx.allocator, package_name) catch |err| {
+        log.err("Failed to fetch build results for package '{s}': {}", .{ package_name, err });
+
+        const error_message = switch (err) {
+            error.PackageNotFound => "Package not found",
+            else => "Failed to fetch build results",
+        };
+
+        return ctx.response.apply(.{
+            .status = .@"Not Found",
+            .mime = http.Mime.TEXT,
+            .body = error_message,
+        });
+    };
+    defer freeBuildResultsPageData(ctx.allocator, build_data);
+
+    return renderTemplateWithData(ctx, "build_results.html", build_data);
 }
 
 // Static file serving is now handled by FsDir middleware
@@ -590,11 +753,21 @@ fn api_get_github_info(ctx: *const Context) !Respond {
     // Fetch repository information from GitHub
     const repo_info = fetchGitHubRepoInfo(ctx.allocator, url) catch |err| {
         log.err("Failed to fetch GitHub repository info for {s}: {}", .{ url, err });
-        return ctx.response.apply(.{ .status = .@"Bad Request", .mime = http.Mime.JSON, .body = 
+
+        const error_message = switch (err) {
+            error.NotZigProject =>
+            \\{
+            \\  "error": "Repository is not a valid Zig project. It must have Zig as the primary language or contain a build.zig file."
+            \\}
+            ,
+            else =>
             \\{
             \\  "error": "Failed to fetch repository information from GitHub"
             \\}
-        });
+            ,
+        };
+
+        return ctx.response.apply(.{ .status = .@"Bad Request", .mime = http.Mime.JSON, .body = error_message });
     };
     defer freeGitHubRepoInfo(ctx.allocator, repo_info);
 
@@ -969,11 +1142,21 @@ fn api_create_package(ctx: *const Context, _: void) !Respond {
     // Fetch repository information from GitHub
     const repo_info = fetchGitHubRepoInfo(ctx.allocator, url) catch |err| {
         log.err("Failed to fetch GitHub repository info for {s}: {}", .{ url, err });
-        return ctx.response.apply(.{ .status = .@"Bad Request", .mime = http.Mime.JSON, .body = 
+
+        const error_message = switch (err) {
+            error.NotZigProject =>
+            \\{
+            \\  "error": "Repository is not a valid Zig project. It must have Zig as the primary language or contain a build.zig file."
+            \\}
+            ,
+            else =>
             \\{
             \\  "error": "Failed to fetch repository information from GitHub"
             \\}
-        });
+            ,
+        };
+
+        return ctx.response.apply(.{ .status = .@"Bad Request", .mime = http.Mime.JSON, .body = error_message });
     };
     defer freeGitHubRepoInfo(ctx.allocator, repo_info);
 
@@ -1179,7 +1362,16 @@ fn fetchGitHubRepoInfo(alloc: Allocator, github_url: []const u8) !GitHubRepoInfo
     // Get license information
     const license = extractLicenseFromResponse(alloc, response_body);
 
-    log.debug("Parsed repo info - name: '{s}', owner: '{s}', description: '{s}', license: '{s}'", .{ name, owner_name, description orelse "null", license orelse "null" });
+    log.debug("Parsed repo info - name: '{s}', owner: '{s}', description: '{s}', license: '{s}', language: '{s}'", .{ name, owner_name, description orelse "null", license orelse "null", language orelse "null" });
+
+    // Validate that this is a Zig project
+    const is_zig_project = try validateZigProject(alloc, owner, repo, language);
+    if (!is_zig_project) {
+        log.warn("Repository {s}/{s} is not a valid Zig project", .{ owner, repo });
+        return error.NotZigProject;
+    }
+
+    log.debug("Repository validated as Zig project", .{});
 
     return GitHubRepoInfo{
         .name = name,
@@ -1189,6 +1381,54 @@ fn fetchGitHubRepoInfo(alloc: Allocator, github_url: []const u8) !GitHubRepoInfo
         .language = language,
         .url = try alloc.dupe(u8, github_url),
     };
+}
+
+// Function to validate if a repository is a Zig project
+fn validateZigProject(alloc: Allocator, owner: []const u8, repo: []const u8, language: ?[]const u8) !bool {
+    log.debug("Validating Zig project for {s}/{s}", .{ owner, repo });
+
+    // Check 1: Primary language should be Zig
+    var is_zig_language = false;
+    if (language) |lang| {
+        is_zig_language = std.mem.eql(u8, lang, "Zig");
+        log.debug("Repository language: '{s}', is Zig: {}", .{ lang, is_zig_language });
+    } else {
+        log.debug("Repository language: null", .{});
+    }
+
+    // Check 2: Look for build.zig file in the repository
+    const has_build_zig = try checkForBuildZig(alloc, owner, repo);
+    log.debug("Has build.zig file: {}", .{has_build_zig});
+
+    // A repository is considered a Zig project if:
+    // - Primary language is Zig, OR
+    // - It has a build.zig file (even if language detection failed or shows different language)
+    const is_valid = is_zig_language or has_build_zig;
+
+    log.debug("Zig project validation result: {} (language: {}, build.zig: {})", .{ is_valid, is_zig_language, has_build_zig });
+
+    return is_valid;
+}
+
+// Function to check if repository has build.zig file
+fn checkForBuildZig(alloc: Allocator, owner: []const u8, repo: []const u8) !bool {
+    // Build GitHub API URL for contents
+    const contents_url = try std.fmt.allocPrint(alloc, "https://api.github.com/repos/{s}/{s}/contents/build.zig", .{ owner, repo });
+    defer alloc.free(contents_url);
+
+    log.debug("Checking for build.zig at: {s}", .{contents_url});
+
+    // Make HTTP request to check if build.zig exists
+    const response_body = makeGitHubRequest(alloc, contents_url) catch |err| {
+        // If we get an error, it likely means the file doesn't exist
+        log.debug("build.zig check failed: {}", .{err});
+        return false;
+    };
+    defer alloc.free(response_body);
+
+    // If we got a successful response, the file exists
+    log.debug("build.zig file found in repository", .{});
+    return true;
 }
 
 // Helper function to make HTTP requests to GitHub API
@@ -1540,6 +1780,399 @@ fn freePackagesTemplateData(alloc: Allocator, data: PackageTemplateData) void {
     alloc.free(data.packages);
 }
 
+// Helper function to extract package name from URL path
+fn extractPackageNameFromPath(alloc: Allocator, path: []const u8) ?[]const u8 {
+    log.debug("extractPackageNameFromPath: Parsing path: '{s}'", .{path});
+
+    // Handle paths like /packages/{name}/builds or /builds/{name}
+    if (std.mem.startsWith(u8, path, "/packages/")) {
+        const after_packages = path["/packages/".len..];
+        if (std.mem.indexOf(u8, after_packages, "/builds")) |builds_pos| {
+            const package_name = after_packages[0..builds_pos];
+            if (package_name.len > 0) {
+                return alloc.dupe(u8, package_name) catch null;
+            }
+        }
+    } else if (std.mem.startsWith(u8, path, "/builds/")) {
+        const after_builds = path["/builds/".len..];
+        // Find the end of the package name (either end of string or next slash)
+        const end_pos = std.mem.indexOf(u8, after_builds, "/") orelse after_builds.len;
+        const package_name = after_builds[0..end_pos];
+        if (package_name.len > 0) {
+            return alloc.dupe(u8, package_name) catch null;
+        }
+    }
+
+    log.debug("extractPackageNameFromPath: Could not extract package name from path", .{});
+    return null;
+}
+
+// Function to fetch build results page data for a specific package
+fn fetchBuildResultsPageData(alloc: Allocator, package_name: []const u8) !BuildResultsPageData {
+    log.debug("fetchBuildResultsPageData: Fetching data for package '{s}'", .{package_name});
+
+    // First, get the package information
+    const PackageRow = struct {
+        id: i64,
+        name: sqlite.Text,
+        url: sqlite.Text,
+        description: ?sqlite.Text,
+        author: ?sqlite.Text,
+        license: ?sqlite.Text,
+        last_updated: sqlite.Text,
+    };
+
+    const package_query = "SELECT id, name, url, description, author, license, last_updated FROM packages WHERE name = :name";
+    var package_stmt = db.prepare(struct { name: sqlite.Text }, PackageRow, package_query) catch |err| {
+        log.err("Failed to prepare package query: {}", .{err});
+        return error.DatabaseError;
+    };
+    defer package_stmt.finalize();
+
+    package_stmt.bind(.{ .name = sqlite.text(package_name) }) catch |err| {
+        log.err("Failed to bind package query: {}", .{err});
+        return error.DatabaseError;
+    };
+    defer package_stmt.reset();
+
+    const package_info = package_stmt.step() catch |err| {
+        log.err("Failed to execute package query: {}", .{err});
+        return error.DatabaseError;
+    } orelse {
+        log.err("Package '{s}' not found", .{package_name});
+        return error.PackageNotFound;
+    };
+
+    log.debug("fetchBuildResultsPageData: Found package with ID {}", .{package_info.id});
+
+    // Fetch detailed build results for this package
+    const build_results = fetchDetailedBuildResults(alloc, package_info.id) catch |err| {
+        log.err("Failed to fetch detailed build results: {}", .{err});
+        return error.DatabaseError;
+    };
+
+    // Calculate build statistics
+    var successful_builds: i32 = 0;
+    var failed_builds: i32 = 0;
+    var pending_builds: i32 = 0;
+
+    for (build_results) |result| {
+        if (std.mem.eql(u8, result.build_status, "success")) {
+            successful_builds += 1;
+        } else if (std.mem.eql(u8, result.build_status, "failed")) {
+            failed_builds += 1;
+        } else if (std.mem.eql(u8, result.build_status, "pending")) {
+            pending_builds += 1;
+        }
+    }
+
+    const total_builds = successful_builds + failed_builds + pending_builds;
+
+    return BuildResultsPageData{
+        .title = try std.fmt.allocPrint(alloc, "Build Results - {s}", .{package_name}),
+        .package_name = try alloc.dupe(u8, package_info.name.data),
+        .package_author = if (package_info.author) |auth| try alloc.dupe(u8, auth.data) else try alloc.dupe(u8, "Unknown"),
+        .package_description = if (package_info.description) |desc| try alloc.dupe(u8, desc.data) else null,
+        .package_license = if (package_info.license) |lic| try alloc.dupe(u8, lic.data) else null,
+        .package_url = try alloc.dupe(u8, package_info.url.data),
+        .package_last_updated = try alloc.dupe(u8, package_info.last_updated.data),
+        .successful_builds = successful_builds,
+        .failed_builds = failed_builds,
+        .pending_builds = pending_builds,
+        .total_builds = total_builds,
+        .build_results = build_results,
+    };
+}
+
+// Function to fetch detailed build results with error logs
+fn fetchDetailedBuildResults(alloc: Allocator, package_id: i64) ![]BuildResultsPageData.BuildResultDetail {
+    log.debug("fetchDetailedBuildResults: Fetching detailed build results for package {}", .{package_id});
+
+    const DetailedBuildResultRow = struct {
+        zig_version: sqlite.Text,
+        build_status: sqlite.Text,
+        test_status: ?sqlite.Text,
+        error_log: ?sqlite.Text,
+        last_checked: sqlite.Text,
+    };
+
+    const build_query =
+        \\SELECT zig_version, build_status, test_status, error_log, last_checked 
+        \\FROM build_results 
+        \\WHERE package_id = :package_id 
+        \\ORDER BY 
+        \\  CASE zig_version 
+        \\    WHEN 'master' THEN 1 
+        \\    WHEN '0.14.0' THEN 2 
+        \\    WHEN '0.13.0' THEN 3 
+        \\    WHEN '0.12.0' THEN 4 
+        \\    ELSE 5 
+        \\  END
+    ;
+
+    var build_stmt = db.prepare(struct { package_id: i64 }, DetailedBuildResultRow, build_query) catch |err| {
+        log.err("Failed to prepare detailed build results query: {}", .{err});
+        return error.DatabaseError;
+    };
+    defer build_stmt.finalize();
+
+    build_stmt.bind(.{ .package_id = package_id }) catch |err| {
+        log.err("Failed to bind detailed build results query: {}", .{err});
+        return error.DatabaseError;
+    };
+    defer build_stmt.reset();
+
+    var build_results = std.ArrayList(BuildResultsPageData.BuildResultDetail).init(alloc);
+    defer build_results.deinit();
+
+    while (build_stmt.step() catch null) |result| {
+        const build_result = BuildResultsPageData.BuildResultDetail{
+            .zig_version = try alloc.dupe(u8, result.zig_version.data),
+            .build_status = try alloc.dupe(u8, result.build_status.data),
+            .test_status = if (result.test_status) |ts| try alloc.dupe(u8, ts.data) else null,
+            .error_log = if (result.error_log) |el| try alloc.dupe(u8, el.data) else null,
+            .last_checked = try alloc.dupe(u8, result.last_checked.data),
+        };
+
+        try build_results.append(build_result);
+    }
+
+    log.debug("fetchDetailedBuildResults: Found {} detailed build results", .{build_results.items.len});
+
+    return try build_results.toOwnedSlice();
+}
+
+// Function to free BuildResultsPageData
+fn freeBuildResultsPageData(alloc: Allocator, data: BuildResultsPageData) void {
+    alloc.free(data.title);
+    alloc.free(data.package_name);
+    alloc.free(data.package_author);
+    if (data.package_description) |desc| alloc.free(desc);
+    if (data.package_license) |lic| alloc.free(lic);
+    alloc.free(data.package_url);
+    alloc.free(data.package_last_updated);
+
+    for (data.build_results) |result| {
+        alloc.free(result.zig_version);
+        alloc.free(result.build_status);
+        if (result.test_status) |ts| alloc.free(ts);
+        if (result.error_log) |el| alloc.free(el);
+        alloc.free(result.last_checked);
+    }
+    alloc.free(data.build_results);
+}
+
+// Function to fetch all builds page data with filtering and pagination
+fn fetchAllBuildsPageData(alloc: Allocator, search: ?[]const u8, zig_version: ?[]const u8, status: ?[]const u8, sort: ?[]const u8, page: i32, limit: i32) !AllBuildsPageData {
+    log.debug("fetchAllBuildsPageData: Fetching builds with filters - search={s}, zig_version={s}, status={s}, sort={s}, page={d}, limit={d}", .{ if (search) |s| s else "null", if (zig_version) |v| v else "null", if (status) |s| s else "null", if (sort) |s| s else "null", page, limit });
+
+    const offset = (page - 1) * limit;
+
+    // Build WHERE clause
+    var where_parts = std.ArrayList([]const u8).init(alloc);
+    defer where_parts.deinit();
+    defer for (where_parts.items) |part| alloc.free(part);
+
+    if (search) |s| {
+        if (s.len > 0) {
+            const search_condition = try std.fmt.allocPrint(alloc, "p.name LIKE '%{s}%'", .{s});
+            try where_parts.append(search_condition);
+        }
+    }
+
+    if (zig_version) |v| {
+        if (v.len > 0) {
+            const version_condition = try std.fmt.allocPrint(alloc, "br.zig_version = '{s}'", .{v});
+            try where_parts.append(version_condition);
+        }
+    }
+
+    if (status) |s| {
+        if (s.len > 0) {
+            const status_condition = try std.fmt.allocPrint(alloc, "br.build_status = '{s}'", .{s});
+            try where_parts.append(status_condition);
+        }
+    }
+
+    var where_clause = std.ArrayList(u8).init(alloc);
+    defer where_clause.deinit();
+
+    if (where_parts.items.len > 0) {
+        try where_clause.appendSlice(" WHERE ");
+        for (where_parts.items, 0..) |part, i| {
+            if (i > 0) try where_clause.appendSlice(" AND ");
+            try where_clause.appendSlice(part);
+        }
+    }
+
+    // Build ORDER BY clause
+    const order_clause = if (sort) |s| blk: {
+        if (std.mem.eql(u8, s, "last_checked_asc")) {
+            break :blk " ORDER BY br.last_checked ASC";
+        } else if (std.mem.eql(u8, s, "package_name_asc")) {
+            break :blk " ORDER BY p.name ASC";
+        } else if (std.mem.eql(u8, s, "package_name_desc")) {
+            break :blk " ORDER BY p.name DESC";
+        } else if (std.mem.eql(u8, s, "zig_version_desc")) {
+            break :blk " ORDER BY CASE br.zig_version WHEN 'master' THEN 1 WHEN '0.14.0' THEN 2 WHEN '0.13.0' THEN 3 WHEN '0.12.0' THEN 4 ELSE 5 END";
+        } else {
+            break :blk " ORDER BY br.last_checked DESC";
+        }
+    } else " ORDER BY br.last_checked DESC";
+
+    // Get total count for pagination
+    const count_query = try std.fmt.allocPrint(alloc, "SELECT COUNT(*) as count FROM build_results br JOIN packages p ON br.package_id = p.id{s}", .{where_clause.items});
+    defer alloc.free(count_query);
+
+    const CountResult = struct { count: i64 };
+    var count_stmt = db.prepare(struct {}, CountResult, count_query) catch |err| {
+        log.err("Failed to prepare count query: {}", .{err});
+        return error.DatabaseError;
+    };
+    defer count_stmt.finalize();
+
+    count_stmt.bind(.{}) catch |err| {
+        log.err("Failed to bind count query: {}", .{err});
+        return error.DatabaseError;
+    };
+    defer count_stmt.reset();
+
+    const total_count = if (count_stmt.step() catch null) |result| result.count else 0;
+
+    // Calculate pagination
+    const total_pages = @as(i32, @intCast(@divTrunc(total_count + @as(i64, @intCast(limit)) - 1, @as(i64, @intCast(limit)))));
+    const page_numbers = try generatePageNumbers(alloc, page, total_pages);
+
+    // Get build statistics
+    const build_counts = fetchBuildCounts() catch .{ .successful = 0, .failed = 0 };
+    const pending_count = fetchPendingBuildsCount() catch 0;
+
+    // Fetch build results
+    const AllBuildResultRow = struct {
+        package_name: sqlite.Text,
+        package_author: ?sqlite.Text,
+        package_description: ?sqlite.Text,
+        zig_version: sqlite.Text,
+        build_status: sqlite.Text,
+        test_status: ?sqlite.Text,
+        error_log: ?sqlite.Text,
+        last_checked: sqlite.Text,
+    };
+
+    const main_query = try std.fmt.allocPrint(alloc,
+        \\SELECT p.name as package_name, p.author as package_author, p.description as package_description,
+        \\       br.zig_version, br.build_status, br.test_status, br.error_log, br.last_checked
+        \\FROM build_results br 
+        \\JOIN packages p ON br.package_id = p.id{s}{s}
+        \\LIMIT {d} OFFSET {d}
+    , .{ where_clause.items, order_clause, limit, offset });
+    defer alloc.free(main_query);
+
+    var main_stmt = db.prepare(struct {}, AllBuildResultRow, main_query) catch |err| {
+        log.err("Failed to prepare main query: {}", .{err});
+        return error.DatabaseError;
+    };
+    defer main_stmt.finalize();
+
+    main_stmt.bind(.{}) catch |err| {
+        log.err("Failed to bind main query: {}", .{err});
+        return error.DatabaseError;
+    };
+    defer main_stmt.reset();
+
+    var build_results = std.ArrayList(AllBuildsPageData.AllBuildResult).init(alloc);
+    defer build_results.deinit();
+
+    while (main_stmt.step() catch null) |row| {
+        const build_result = AllBuildsPageData.AllBuildResult{
+            .package_name = try alloc.dupe(u8, row.package_name.data),
+            .package_author = if (row.package_author) |auth| try alloc.dupe(u8, auth.data) else try alloc.dupe(u8, "Unknown"),
+            .package_description = if (row.package_description) |desc| try alloc.dupe(u8, desc.data) else null,
+            .zig_version = try alloc.dupe(u8, row.zig_version.data),
+            .build_status = try alloc.dupe(u8, row.build_status.data),
+            .test_status = if (row.test_status) |ts| try alloc.dupe(u8, ts.data) else null,
+            .error_log = if (row.error_log) |el| try alloc.dupe(u8, el.data) else null,
+            .last_checked = try alloc.dupe(u8, row.last_checked.data),
+        };
+
+        try build_results.append(build_result);
+    }
+
+    log.debug("fetchAllBuildsPageData: Found {} build results", .{build_results.items.len});
+
+    return AllBuildsPageData{
+        .title = "All Builds",
+        .successful_builds = build_counts.successful,
+        .failed_builds = build_counts.failed,
+        .pending_builds = pending_count,
+        .total_builds = build_counts.successful + build_counts.failed + pending_count,
+        .build_results = try build_results.toOwnedSlice(),
+        .current_page = page,
+        .total_pages = total_pages,
+        .page_numbers = page_numbers,
+    };
+}
+
+// Function to free AllBuildsPageData
+fn freeAllBuildsPageData(alloc: Allocator, data: AllBuildsPageData) void {
+    for (data.build_results) |result| {
+        alloc.free(result.package_name);
+        alloc.free(result.package_author);
+        if (result.package_description) |desc| alloc.free(desc);
+        alloc.free(result.zig_version);
+        alloc.free(result.build_status);
+        if (result.test_status) |ts| alloc.free(ts);
+        if (result.error_log) |el| alloc.free(el);
+        alloc.free(result.last_checked);
+    }
+    alloc.free(data.build_results);
+    alloc.free(data.page_numbers);
+}
+
+// Helper function to fetch pending builds count
+fn fetchPendingBuildsCount() !i32 {
+    const CountRow = struct { count: i64 };
+    const query = "SELECT COUNT(*) as count FROM build_results WHERE build_status = 'pending'";
+
+    var stmt = db.prepare(struct {}, CountRow, query) catch return 0;
+    defer stmt.finalize();
+
+    stmt.bind(.{}) catch return 0;
+    defer stmt.reset();
+
+    if (stmt.step() catch null) |row| {
+        return @intCast(row.count);
+    }
+    return 0;
+}
+
+// Helper function to generate page numbers for pagination
+fn generatePageNumbers(alloc: Allocator, current_page: i32, total_pages: i32) ![]i32 {
+    if (total_pages <= 1) {
+        return &[_]i32{};
+    }
+
+    var page_numbers = std.ArrayList(i32).init(alloc);
+    defer page_numbers.deinit();
+
+    // Show up to 5 page numbers around current page
+    const max_pages_to_show = 5;
+    var start_page = @max(1, current_page - max_pages_to_show / 2);
+    const end_page = @min(total_pages, start_page + max_pages_to_show - 1);
+
+    // Adjust start_page if we're near the end
+    if (end_page - start_page + 1 < max_pages_to_show) {
+        start_page = @max(1, end_page - max_pages_to_show + 1);
+    }
+
+    var page = start_page;
+    while (page <= end_page) : (page += 1) {
+        try page_numbers.append(page);
+    }
+
+    return try page_numbers.toOwnedSlice();
+}
+
 fn fetchHomeStatsData(alloc: Allocator) !HomeStatsData {
     log.debug("fetchHomeStatsData: Starting to fetch home page statistics", .{});
 
@@ -1695,7 +2328,7 @@ fn fetchRecentBuilds(alloc: Allocator) ![]HomeStatsData.RecentBuild {
         \\SELECT p.name as package_name, br.zig_version, br.build_status 
         \\FROM build_results br 
         \\JOIN packages p ON br.package_id = p.id 
-        \\ORDER BY br.created_at DESC LIMIT 5
+        \\ORDER BY br.last_checked DESC LIMIT 5
     ;
 
     var stmt = db.prepare(struct {}, BuildRow, query) catch return &[_]HomeStatsData.RecentBuild{};
@@ -1835,14 +2468,14 @@ fn fetchRecentActivity(alloc: Allocator) ![]StatsPageData.RecentActivity {
         package_name: sqlite.Text,
         zig_version: sqlite.Text,
         build_status: sqlite.Text,
-        created_at: sqlite.Text,
+        last_checked: sqlite.Text,
     };
 
     const query =
-        \\SELECT p.name as package_name, br.zig_version, br.build_status, br.created_at
+        \\SELECT p.name as package_name, br.zig_version, br.build_status, br.last_checked
         \\FROM build_results br 
         \\JOIN packages p ON br.package_id = p.id 
-        \\ORDER BY br.created_at DESC LIMIT 10
+        \\ORDER BY br.last_checked DESC LIMIT 10
     ;
 
     var stmt = db.prepare(struct {}, ActivityRow, query) catch return &[_]StatsPageData.RecentActivity{};
@@ -1859,7 +2492,7 @@ fn fetchRecentActivity(alloc: Allocator) ![]StatsPageData.RecentActivity {
             .package_name = alloc.dupe(u8, row.package_name.data) catch continue,
             .zig_version = alloc.dupe(u8, row.zig_version.data) catch continue,
             .build_status = alloc.dupe(u8, row.build_status.data) catch continue,
-            .timestamp = alloc.dupe(u8, row.created_at.data) catch continue,
+            .timestamp = alloc.dupe(u8, row.last_checked.data) catch continue,
         };
         activities.append(activity) catch continue;
     }
@@ -1950,7 +2583,10 @@ pub fn main() !void {
         Route.init("/packages").get({}, packages_handler).layer(),
         Route.init("/submit").get({}, submit_handler).post({}, submit_handler).layer(),
         Route.init("/stats").get({}, stats_handler).layer(),
+        Route.init("/builds").get({}, builds_handler).layer(),
         Route.init("/api").get({}, api_docs_handler).layer(),
+        Route.init("/packages/%s/builds").get({}, build_results_handler).layer(),
+        Route.init("/builds/%s").get({}, build_results_handler).layer(),
         FsDir.serve("/static", static_dir),
         Route.init("/api/health").get({}, api_health_handler).layer(),
         Route.init("/api/github-info").post({}, api_github_info_handler).layer(),
@@ -1971,7 +2607,10 @@ pub fn main() !void {
     log.info("  - GET /packages    - Package listing", .{});
     log.info("  - GET /submit      - Submit package", .{});
     log.info("  - GET /stats       - Package statistics", .{});
+    log.info("  - GET /builds      - All build results", .{});
     log.info("  - GET /api         - API documentation", .{});
+    log.info("  - GET /packages/{{name}}/builds - Build results for package", .{});
+    log.info("  - GET /builds/{{name}} - Build results for package (alternative)", .{});
     log.info("  - GET /api/health  - Health check", .{});
     log.info("  - POST /api/github-info - Get GitHub repository info", .{});
     log.info("  - GET /api/packages - List packages", .{});

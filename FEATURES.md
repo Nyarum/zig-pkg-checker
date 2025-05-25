@@ -100,10 +100,24 @@ A comprehensive feature overview showing what's implemented and what's planned f
   - [x] Author
   - [x] Package name (search functionality)
 
+### All Builds Page
+- [x] **Complete builds page implementation** (`/builds` route)
+  - [x] Show all build results across all packages
+  - [x] Advanced filtering system:
+    - [x] Search by package name
+    - [x] Filter by Zig version (master, 0.14.0, 0.13.0, 0.12.0)
+    - [x] Filter by build status (success, failed, pending)
+    - [x] Sort options (latest first, oldest first, package name A-Z/Z-A, Zig version)
+  - [x] Pagination with page numbers
+  - [x] Build statistics summary (successful, failed, pending, total)
+  - [x] Error log viewing for failed builds
+  - [x] Links to individual package build details
+  - [x] Responsive design with modern UI
+
 ### Package Discovery
 - [x] Manual package submission via web form
 - [x] Manual package submission via API
-- [ ] **Automatic package discovery** (planned)
+- [ ] **Automatic package discovery** (use https://github.com/zigcc/awesome-zig, and github api to get all packages with filter by zig)
 - [ ] **Build status real-time updates**
   - [ ] WebSocket or SSE for live build status
 
@@ -113,3 +127,6 @@ A comprehensive feature overview showing what's implemented and what's planned f
   - [ ] Tag-based filtering
   - [ ] Author-based filtering
   - [ ] License-based filtering
+
+[x] Don't allow to submit repository that is not zig
+[x] Add build results page and functionality for that

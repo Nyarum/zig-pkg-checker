@@ -1,0 +1,236 @@
+<div class="bg-gray-900 text-white py-16 text-center">
+    <div class="container mx-auto px-4">
+        <h1 class="text-4xl font-bold mb-4 flex items-center justify-center gap-4">
+            <i class="fas fa-hammer"></i>
+            Build Results
+        </h1>
+        <p class="text-lg opacity-80">Detailed build information for {{package_name}}</p>
+    </div>
+</div>
+
+<div class="container mx-auto px-4 py-8">
+    <!-- Package Info Header -->
+    <div class="bg-white rounded-lg shadow-sm border p-6 mb-8">
+        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+                <h2 class="text-2xl font-bold text-gray-900 mb-2">{{package_name}}</h2>
+                <div class="flex items-center gap-4 text-sm text-gray-600">
+                    <span class="flex items-center gap-1">
+                        <i class="fas fa-user"></i>
+                        {{package_author}}
+                    </span>
+                    {{#if package_license}}
+                    <span class="flex items-center gap-1">
+                        <i class="fas fa-balance-scale"></i>
+                        {{package_license}}
+                    </span>
+                    {{/if}}
+                    <span class="flex items-center gap-1">
+                        <i class="fas fa-clock"></i>
+                        Last updated: {{package_last_updated}}
+                    </span>
+                </div>
+                {{#if package_description}}
+                <p class="text-gray-700 mt-3">{{package_description}}</p>
+                {{/if}}
+            </div>
+            <div class="flex gap-3">
+                <a href="{{package_url}}" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium" target="_blank">
+                    <i class="fas fa-external-link-alt mr-2"></i>
+                    Repository
+                </a>
+                <a href="/packages" class="px-4 py-2 bg-zig-orange text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium">
+                    <i class="fas fa-arrow-left mr-2"></i>
+                    Back to Packages
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Build Results Summary -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div class="bg-white rounded-lg shadow-sm border p-6 text-center">
+            <div class="text-3xl font-bold text-green-600 mb-2">{{successful_builds}}</div>
+            <div class="text-sm text-gray-600">Successful Builds</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm border p-6 text-center">
+            <div class="text-3xl font-bold text-red-600 mb-2">{{failed_builds}}</div>
+            <div class="text-sm text-gray-600">Failed Builds</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm border p-6 text-center">
+            <div class="text-3xl font-bold text-yellow-600 mb-2">{{pending_builds}}</div>
+            <div class="text-sm text-gray-600">Pending Builds</div>
+        </div>
+        <div class="bg-white rounded-lg shadow-sm border p-6 text-center">
+            <div class="text-3xl font-bold text-blue-600 mb-2">{{total_builds}}</div>
+            <div class="text-sm text-gray-600">Total Builds</div>
+        </div>
+    </div>
+
+    <!-- Detailed Build Results -->
+    <div class="bg-white rounded-lg shadow-sm border overflow-hidden">
+        <div class="p-6 border-b border-gray-200">
+            <h3 class="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <i class="fas fa-list"></i>
+                Build Results by Zig Version
+            </h3>
+        </div>
+        
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Zig Version</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Build Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Test Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Checked</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {{#each build_results}}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center">
+                                <div class="text-sm font-medium text-gray-900">{{zig_version}}</div>
+                                {{#if (eq zig_version "master")}}
+                                <span class="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                    Latest
+                                </span>
+                                {{/if}}
+                                {{#if (eq zig_version "0.14.0")}}
+                                <span class="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    Stable
+                                </span>
+                                {{/if}}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium build-status-{{build_status}}">
+                                {{#if (eq build_status "success")}}
+                                <i class="fas fa-check-circle mr-1"></i>
+                                Success
+                                {{else if (eq build_status "failed")}}
+                                <i class="fas fa-times-circle mr-1"></i>
+                                Failed
+                                {{else if (eq build_status "pending")}}
+                                <i class="fas fa-clock mr-1"></i>
+                                Pending
+                                {{else}}
+                                <i class="fas fa-question-circle mr-1"></i>
+                                {{build_status}}
+                                {{/if}}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {{#if test_status}}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium test-status-{{test_status}}">
+                                {{#if (eq test_status "success")}}
+                                <i class="fas fa-check-circle mr-1"></i>
+                                Passed
+                                {{else if (eq test_status "failed")}}
+                                <i class="fas fa-times-circle mr-1"></i>
+                                Failed
+                                {{else}}
+                                <i class="fas fa-question-circle mr-1"></i>
+                                {{test_status}}
+                                {{/if}}
+                            </span>
+                            {{else}}
+                            <span class="text-gray-400 text-sm">No tests</span>
+                            {{/if}}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{last_checked}}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            {{#if error_log}}
+                            <button onclick="toggleErrorLog('{{zig_version}}')" class="text-red-600 hover:text-red-900 mr-3">
+                                <i class="fas fa-exclamation-triangle mr-1"></i>
+                                View Error
+                            </button>
+                            {{/if}}
+                            <button onclick="triggerRebuild('{{zig_version}}')" class="text-zig-orange hover:text-orange-600">
+                                <i class="fas fa-redo mr-1"></i>
+                                Rebuild
+                            </button>
+                        </td>
+                    </tr>
+                    {{#if error_log}}
+                    <tr id="error-log-{{zig_version}}" class="hidden">
+                        <td colspan="5" class="px-6 py-4 bg-red-50">
+                            <div class="border-l-4 border-red-400 pl-4">
+                                <h4 class="text-sm font-medium text-red-800 mb-2">
+                                    <i class="fas fa-bug mr-1"></i>
+                                    Build Error Log for {{zig_version}}
+                                </h4>
+                                <pre class="text-xs text-red-700 bg-red-100 p-3 rounded overflow-x-auto whitespace-pre-wrap">{{error_log}}</pre>
+                            </div>
+                        </td>
+                    </tr>
+                    {{/if}}
+                    {{/each}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {{#unless build_results}}
+    <div class="bg-white rounded-lg shadow-sm border p-12 text-center">
+        <i class="fas fa-hammer text-6xl text-gray-400 mb-6"></i>
+        <h3 class="text-2xl font-bold text-gray-800 mb-2">No build results yet</h3>
+        <p class="text-gray-600 mb-6">This package hasn't been built yet. Build results will appear here once the build process starts.</p>
+        <button onclick="triggerAllBuilds()" class="bg-zig-orange text-white px-6 py-3 rounded-lg font-semibold hover:bg-orange-600 transition-colors">
+            <i class="fas fa-play mr-2"></i>
+            Start Build Process
+        </button>
+    </div>
+    {{/unless}}
+</div>
+
+<script>
+function toggleErrorLog(zigVersion) {
+    const errorLogRow = document.getElementById('error-log-' + zigVersion);
+    if (errorLogRow.classList.contains('hidden')) {
+        errorLogRow.classList.remove('hidden');
+    } else {
+        errorLogRow.classList.add('hidden');
+    }
+}
+
+function triggerRebuild(zigVersion) {
+    if (confirm(`Are you sure you want to trigger a rebuild for Zig ${zigVersion}?`)) {
+        // TODO: Implement rebuild API call
+        alert(`Rebuild triggered for Zig ${zigVersion}. This feature will be implemented soon.`);
+    }
+}
+
+function triggerAllBuilds() {
+    if (confirm('Are you sure you want to start the build process for all Zig versions?')) {
+        // TODO: Implement build trigger API call
+        alert('Build process started. This feature will be implemented soon.');
+    }
+}
+</script>
+
+<style>
+.build-status-success {
+    @apply bg-green-100 text-green-800;
+}
+
+.build-status-failed {
+    @apply bg-red-100 text-red-800;
+}
+
+.build-status-pending {
+    @apply bg-yellow-100 text-yellow-800;
+}
+
+.test-status-success {
+    @apply bg-green-100 text-green-800;
+}
+
+.test-status-failed {
+    @apply bg-red-100 text-red-800;
+}
+</style> 

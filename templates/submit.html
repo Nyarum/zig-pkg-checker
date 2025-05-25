@@ -150,11 +150,7 @@
                 </li>
                 <li class="flex items-start">
                     <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
-                    Must contain a valid <code class="bg-green-100 px-1 rounded">build.zig</code> file
-                </li>
-                <li class="flex items-start">
-                    <i class="fas fa-check text-green-600 mr-2 mt-1"></i>
-                    Written primarily in Zig language
+                    Must be a valid Zig project (have Zig as primary language OR contain a <code class="bg-green-100 px-1 rounded">build.zig</code> file)
                 </li>
                 <li class="flex items-start">
                     <i class="fas fa-info text-blue-600 mr-2 mt-1"></i>
@@ -180,7 +176,54 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Error display functions
     function showError(message) {
-        errorText.textContent = message;
+        errorText.innerHTML = message;
+        errorMessage.classList.remove('hidden');
+        // Scroll to top to show error
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function showZigProjectError(message) {
+        // Check if this is the specific NotZigProject error
+        if (message.includes('not a valid Zig project') || message.includes('must have Zig as the primary language or contain a build.zig')) {
+            const beautifulErrorMessage = `
+                <div class="space-y-3">
+                    <div class="flex items-center">
+                        <i class="fas fa-exclamation-triangle text-red-500 mr-2"></i>
+                        <span class="font-semibold">Not a Zig Project</span>
+                    </div>
+                    <p class="text-sm">The submitted repository is not recognized as a valid Zig project.</p>
+                    <div class="bg-red-50 p-3 rounded border-l-4 border-red-400">
+                        <p class="text-sm font-medium text-red-800 mb-2">To be accepted, your repository must meet one of these requirements:</p>
+                        <ul class="text-sm text-red-700 space-y-1">
+                            <li class="flex items-start">
+                                <i class="fas fa-check-circle text-red-500 mr-2 mt-0.5 text-xs"></i>
+                                Have <strong>Zig</strong> as the primary language on GitHub
+                            </li>
+                            <li class="flex items-start">
+                                <i class="fas fa-check-circle text-red-500 mr-2 mt-0.5 text-xs"></i>
+                                Contain a <code class="bg-red-100 px-1 rounded text-red-800">build.zig</code> file in the root directory
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="bg-blue-50 p-3 rounded border-l-4 border-blue-400">
+                        <p class="text-sm text-blue-800">
+                            <i class="fas fa-lightbulb mr-1"></i>
+                            <strong>Tip:</strong> If your repository is a Zig project but not detected correctly, make sure you have a <code class="bg-blue-100 px-1 rounded">build.zig</code> file in the root directory.
+                        </p>
+                    </div>
+                </div>
+            `;
+            errorText.innerHTML = beautifulErrorMessage;
+        } else {
+            // Fallback to regular error display for other errors
+            errorText.innerHTML = `
+                <div class="flex items-center">
+                    <i class="fas fa-exclamation-triangle text-red-500 mr-2"></i>
+                    <span>Error fetching repository information: ${message}</span>
+                </div>
+            `;
+        }
+        
         errorMessage.classList.remove('hidden');
         // Scroll to top to show error
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -224,7 +267,16 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             if (!response.ok) {
-                throw new Error('Failed to fetch repository information');
+                // Try to parse error message from JSON response
+                let errorMessage = 'Failed to fetch repository information';
+                try {
+                    const errorData = await response.json();
+                    errorMessage = errorData.error || errorMessage;
+                } catch (parseError) {
+                    // If JSON parsing fails, response might be text
+                    console.log('Failed to parse JSON error response:', parseError);
+                }
+                throw new Error(errorMessage);
             }
 
             repositoryData = await response.json();
@@ -240,7 +292,7 @@ document.addEventListener('DOMContentLoaded', function() {
             submitBtn.disabled = false;
 
         } catch (error) {
-            showError('Error fetching repository information: ' + error.message);
+            showZigProjectError(error.message);
             repositoryData = null;
             repoPreview.classList.add('hidden');
             submitBtn.disabled = true;
@@ -293,7 +345,7 @@ document.addEventListener('DOMContentLoaded', function() {
             window.location.href = '/packages';
 
         } catch (error) {
-            showError('Error submitting package: ' + error.message);
+            showZigProjectError('Error submitting package: ' + error.message);
             
             // Reset button states on error
             submitBtn.disabled = false;
