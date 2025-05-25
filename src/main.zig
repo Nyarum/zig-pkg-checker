@@ -975,6 +975,7 @@ fn test_handler(ctx: *const Context, _: void) !Respond {
         .status = .OK,
         .mime = http.Mime.JSON,
         .body = json_response,
+        .headers = addCorsHeaders(),
     });
 }
 
@@ -1032,13 +1033,18 @@ fn build_results_handler(ctx: *const Context, _: void) !Respond {
 
 // API handlers
 fn api_health_handler(ctx: *const Context, _: void) !Respond {
-    return ctx.response.apply(.{ .status = .OK, .mime = http.Mime.JSON, .body = 
+    return ctx.response.apply(.{
+        .status = .OK,
+        .mime = http.Mime.JSON,
+        .body =
         \\{
         \\  "status": "healthy",
         \\  "timestamp": "2024-01-01T00:00:00Z",
         \\  "database": "connected",
         \\  "version": "1.0.0"
         \\}
+        ,
+        .headers = addCorsHeaders(),
     });
 }
 
@@ -1053,6 +1059,7 @@ fn api_github_info_handler(ctx: *const Context, _: void) !Respond {
         .status = .@"Method Not Allowed",
         .mime = http.Mime.TEXT,
         .body = "Method not allowed",
+        .headers = addCorsHeaders(),
     });
 }
 
@@ -1124,6 +1131,7 @@ fn api_get_github_info(ctx: *const Context) !Respond {
         .status = .OK,
         .mime = http.Mime.JSON,
         .body = response_body,
+        .headers = addCorsHeaders(),
     });
 }
 
@@ -1140,6 +1148,7 @@ fn api_packages_handler(ctx: *const Context, _: void) !Respond {
         .status = .@"Method Not Allowed",
         .mime = http.Mime.TEXT,
         .body = "Method not allowed",
+        .headers = addCorsHeaders(),
     });
 }
 
@@ -1430,7 +1439,12 @@ fn api_get_packages(ctx: *const Context, _: void) !Respond {
 
     // Transfer ownership of the response to the framework
     const response_body = try response.toOwnedSlice();
-    return ctx.response.apply(.{ .status = .OK, .mime = http.Mime.JSON, .body = response_body });
+    return ctx.response.apply(.{
+        .status = .OK,
+        .mime = http.Mime.JSON,
+        .body = response_body,
+        .headers = addCorsHeaders(),
+    });
 }
 
 // Helper function to escape JSON strings
@@ -1455,10 +1469,15 @@ fn escapeJsonString(alloc: Allocator, input: []const u8) ![]u8 {
 fn api_create_package(ctx: *const Context, _: void) !Respond {
     // Read request body
     const body = ctx.request.body orelse {
-        return ctx.response.apply(.{ .status = .@"Bad Request", .mime = http.Mime.JSON, .body = 
+        return ctx.response.apply(.{
+            .status = .@"Bad Request",
+            .mime = http.Mime.JSON,
+            .body =
             \\{
             \\  "error": "Request body is required"
             \\}
+            ,
+            .headers = addCorsHeaders(),
         });
     };
 
@@ -1599,6 +1618,7 @@ fn api_create_package(ctx: *const Context, _: void) !Respond {
         .status = .Created,
         .mime = http.Mime.JSON,
         .body = response_body,
+        .headers = addCorsHeaders(),
     });
 }
 
@@ -1814,6 +1834,26 @@ fn makeGitHubRequest(alloc: Allocator, url: []const u8) ![]u8 {
 
     // Return a copy of the response body
     return alloc.dupe(u8, response_body.items);
+}
+
+// CORS helper function to add CORS headers to responses
+fn addCorsHeaders() []const [2][]const u8 {
+    return &[_][2][]const u8{
+        .{ "Access-Control-Allow-Origin", "*" },
+        .{ "Access-Control-Allow-Methods", "GET, POST, OPTIONS" },
+        .{ "Access-Control-Allow-Headers", "Content-Type, Authorization" },
+        .{ "Access-Control-Max-Age", "86400" },
+    };
+}
+
+// Helper function to handle OPTIONS preflight requests
+fn options_handler(ctx: *const Context, _: void) !Respond {
+    return ctx.response.apply(.{
+        .status = .OK,
+        .mime = http.Mime.TEXT,
+        .body = "",
+        .headers = addCorsHeaders(),
+    });
 }
 
 // Helper function to extract owner from GitHub API response
@@ -2921,7 +2961,7 @@ pub fn main() !void {
     }
     log.info("Docker check phase completed", .{});
 
-    const host = "127.0.0.1";
+    const host = "0.0.0.0";
     const port = 3001;
     log.info("Server configuration: host={s}, port={}", .{ host, port });
 
@@ -2932,23 +2972,23 @@ pub fn main() !void {
 
     log.info("Initializing router...", .{});
     var router = try Router.init(allocator, &.{
-        Route.init("/").get({}, home_handler).layer(),
-        Route.init("/packages").get({}, packages_handler).layer(),
-        Route.init("/submit").get({}, submit_handler).post({}, submit_handler).layer(),
-        Route.init("/stats").get({}, stats_handler).layer(),
-        Route.init("/builds").get({}, builds_handler).layer(),
-        Route.init("/api").get({}, api_docs_handler).layer(),
-        Route.init("/packages/%s/builds").get({}, build_results_handler).layer(),
-        Route.init("/builds/%s").get({}, build_results_handler).layer(),
+        Route.init("/").get({}, home_handler).options({}, options_handler).layer(),
+        Route.init("/packages").get({}, packages_handler).options({}, options_handler).layer(),
+        Route.init("/submit").get({}, submit_handler).post({}, submit_handler).options({}, options_handler).layer(),
+        Route.init("/stats").get({}, stats_handler).options({}, options_handler).layer(),
+        Route.init("/builds").get({}, builds_handler).options({}, options_handler).layer(),
+        Route.init("/api").get({}, api_docs_handler).options({}, options_handler).layer(),
+        Route.init("/packages/%s/builds").get({}, build_results_handler).options({}, options_handler).layer(),
+        Route.init("/builds/%s").get({}, build_results_handler).options({}, options_handler).layer(),
         FsDir.serve("/static", static_dir),
-        Route.init("/api/health").get({}, api_health_handler).layer(),
-        Route.init("/api/github-info").post({}, api_github_info_handler).layer(),
-        Route.init("/api/packages").get({}, api_get_packages).post({}, api_create_package).layer(),
+        Route.init("/api/health").get({}, api_health_handler).options({}, options_handler).layer(),
+        Route.init("/api/github-info").post({}, api_github_info_handler).options({}, options_handler).layer(),
+        Route.init("/api/packages").get({}, api_get_packages).post({}, api_create_package).options({}, options_handler).layer(),
         // Admin API endpoints (require authentication)
-        Route.init("/admin/trigger-build").post({}, admin_trigger_build_handler).layer(),
-        Route.init("/admin/check-builds").post({}, admin_check_builds_handler).layer(),
-        Route.init("/admin/status").get({}, admin_status_handler).layer(),
-        Route.init("/test").get({}, test_handler).layer(),
+        Route.init("/admin/trigger-build").post({}, admin_trigger_build_handler).options({}, options_handler).layer(),
+        Route.init("/admin/check-builds").post({}, admin_check_builds_handler).options({}, options_handler).layer(),
+        Route.init("/admin/status").get({}, admin_status_handler).options({}, options_handler).layer(),
+        Route.init("/test").get({}, test_handler).options({}, options_handler).layer(),
     }, .{});
     defer router.deinit(allocator);
     log.info("Router initialized with all routes", .{});

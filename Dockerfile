@@ -61,7 +61,6 @@ RUN apk add --no-cache \
 # Create app user for security and add to docker group
 RUN addgroup -g 1001 -S appgroup && \
     adduser -u 1001 -S appuser -G appgroup && \
-    addgroup -g 999 -S docker && \
     adduser appuser docker
 
 # Create necessary directories
