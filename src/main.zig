@@ -438,17 +438,21 @@ fn test_handler(ctx: *const Context, _: void) !Respond {
     const path = ctx.request.uri orelse "/";
     log.info("test_handler: Received request for path: '{s}'", .{path});
 
-    const response_body = try std.fmt.allocPrint(ctx.allocator,
-        \\<html><body>
-        \\<h1>Test Handler</h1>
-        \\<p>Received request for: {s}</p>
-        \\</body></html>
-    , .{path});
+    // Test JSON response
+    const json_response =
+        \\{
+        \\  "test": "success",
+        \\  "path": "test",
+        \\  "packages": [
+        \\    {"id": 1, "name": "test-package", "author": "test-author"}
+        \\  ]
+        \\}
+    ;
 
     return ctx.response.apply(.{
         .status = .OK,
-        .mime = http.Mime.HTML,
-        .body = response_body,
+        .mime = http.Mime.JSON,
+        .body = json_response,
     });
 }
 
@@ -558,10 +562,146 @@ fn api_packages_handler(ctx: *const Context, _: void) !Respond {
 }
 
 fn api_get_packages(ctx: *const Context, _: void) !Respond {
-    // Prepare and execute COUNT query using proper sqlite prepared statement
+    // Parse query parameters
+    const query_string = if (ctx.request.uri) |uri| blk: {
+        if (std.mem.indexOf(u8, uri, "?")) |query_start| {
+            break :blk uri[query_start + 1 ..];
+        } else {
+            break :blk "";
+        }
+    } else "";
+
+    // Extract query parameters
+    const search = extractUrlParam(ctx.allocator, query_string, "search");
+    defer if (search) |s| ctx.allocator.free(s);
+
+    const zig_version = extractUrlParam(ctx.allocator, query_string, "zig_version");
+    defer if (zig_version) |v| ctx.allocator.free(v);
+
+    const status = extractUrlParam(ctx.allocator, query_string, "status");
+    defer if (status) |s| ctx.allocator.free(s);
+
+    const license = extractUrlParam(ctx.allocator, query_string, "license");
+    defer if (license) |l| ctx.allocator.free(l);
+
+    const author = extractUrlParam(ctx.allocator, query_string, "author");
+    defer if (author) |a| ctx.allocator.free(a);
+
+    const sort = extractUrlParam(ctx.allocator, query_string, "sort");
+    defer if (sort) |s| ctx.allocator.free(s);
+
+    const page_str = extractUrlParam(ctx.allocator, query_string, "page");
+    defer if (page_str) |p| ctx.allocator.free(p);
+
+    const limit_str = extractUrlParam(ctx.allocator, query_string, "limit");
+    defer if (limit_str) |l| ctx.allocator.free(l);
+
+    // Parse pagination parameters
+    const page = if (page_str) |p| std.fmt.parseInt(i32, p, 10) catch 1 else 1;
+    const limit = if (limit_str) |l| std.fmt.parseInt(i32, l, 10) catch 20 else 20;
+    const offset = (page - 1) * limit;
+
+    log.debug("API packages query parameters: search={s}, zig_version={s}, status={s}, license={s}, author={s}, sort={s}, page={d}, limit={d}", .{ if (search) |s| s else "null", if (zig_version) |v| v else "null", if (status) |s| s else "null", if (license) |l| l else "null", if (author) |a| a else "null", if (sort) |s| s else "null", page, limit });
+
+    // Build WHERE clause conditions
+    var where_parts = std.ArrayList([]const u8).init(ctx.allocator);
+    defer where_parts.deinit();
+
+    // Add search condition
+    if (search) |s| {
+        if (s.len > 0) {
+            const search_condition = try std.fmt.allocPrint(ctx.allocator, "(p.name LIKE '%{s}%' OR p.description LIKE '%{s}%' OR p.author LIKE '%{s}%')", .{ s, s, s });
+            try where_parts.append(search_condition);
+        }
+    }
+
+    // Add license filter
+    if (license) |l| {
+        if (l.len > 0) {
+            // Handle both short names (MIT) and full names (MIT License)
+            const license_condition = if (std.mem.eql(u8, l, "MIT"))
+                try std.fmt.allocPrint(ctx.allocator, "(p.license = 'MIT' OR p.license = 'MIT License')", .{})
+            else if (std.mem.eql(u8, l, "Apache-2.0"))
+                try std.fmt.allocPrint(ctx.allocator, "(p.license = 'Apache-2.0' OR p.license = 'Apache License 2.0')", .{})
+            else if (std.mem.eql(u8, l, "GPL-3.0"))
+                try std.fmt.allocPrint(ctx.allocator, "(p.license = 'GPL-3.0' OR p.license = 'GNU General Public License v3.0')", .{})
+            else if (std.mem.eql(u8, l, "BSD-3-Clause"))
+                try std.fmt.allocPrint(ctx.allocator, "(p.license = 'BSD-3-Clause' OR p.license = 'BSD 3-Clause \"New\" or \"Revised\" License')", .{})
+            else if (std.mem.eql(u8, l, "ISC"))
+                try std.fmt.allocPrint(ctx.allocator, "(p.license = 'ISC' OR p.license = 'ISC License')", .{})
+            else if (std.mem.eql(u8, l, "Unlicense"))
+                try std.fmt.allocPrint(ctx.allocator, "(p.license = 'Unlicense' OR p.license = 'The Unlicense')", .{})
+            else if (std.mem.eql(u8, l, "MPL-2.0"))
+                try std.fmt.allocPrint(ctx.allocator, "(p.license = 'MPL-2.0' OR p.license = 'Mozilla Public License 2.0')", .{})
+            else
+                try std.fmt.allocPrint(ctx.allocator, "p.license = '{s}'", .{l});
+            try where_parts.append(license_condition);
+        }
+    }
+
+    // Add author filter
+    if (author) |a| {
+        if (a.len > 0) {
+            const author_condition = try std.fmt.allocPrint(ctx.allocator, "p.author = '{s}'", .{a});
+            try where_parts.append(author_condition);
+        }
+    }
+
+    // Determine if we need to join with build_results
+    var needs_build_join = false;
+    if (zig_version) |v| {
+        if (v.len > 0) {
+            const version_condition = try std.fmt.allocPrint(ctx.allocator, "br.zig_version = '{s}'", .{v});
+            try where_parts.append(version_condition);
+            needs_build_join = true;
+        }
+    }
+
+    if (status) |s| {
+        if (s.len > 0) {
+            const status_condition = try std.fmt.allocPrint(ctx.allocator, "br.build_status = '{s}'", .{s});
+            try where_parts.append(status_condition);
+            needs_build_join = true;
+        }
+    }
+
+    // Build ORDER BY clause
+    const order_clause = if (sort) |s| blk: {
+        if (std.mem.eql(u8, s, "name")) {
+            break :blk "ORDER BY p.name ASC";
+        } else if (std.mem.eql(u8, s, "updated")) {
+            break :blk "ORDER BY p.created_at DESC";
+        } else if (std.mem.eql(u8, s, "author")) {
+            break :blk "ORDER BY p.author ASC";
+        } else {
+            break :blk "ORDER BY p.created_at DESC";
+        }
+    } else "ORDER BY p.created_at DESC";
+
+    // Build WHERE clause
+    var where_clause = std.ArrayList(u8).init(ctx.allocator);
+    defer where_clause.deinit();
+
+    if (where_parts.items.len > 0) {
+        try where_clause.appendSlice(" WHERE ");
+        for (where_parts.items, 0..) |part, i| {
+            if (i > 0) try where_clause.appendSlice(" AND ");
+            try where_clause.appendSlice(part);
+        }
+    }
+
+    // Build count query
+    const count_query = if (needs_build_join)
+        try std.fmt.allocPrint(ctx.allocator, "SELECT COUNT(DISTINCT p.id) as count FROM packages p JOIN build_results br ON p.id = br.package_id{s}", .{where_clause.items})
+    else
+        try std.fmt.allocPrint(ctx.allocator, "SELECT COUNT(*) as count FROM packages p{s}", .{where_clause.items});
+    defer ctx.allocator.free(count_query);
+
+    // Execute count query
     const CountResult = struct { count: i64 };
-    const count_stmt = db.prepare(struct {}, CountResult, "SELECT COUNT(*) as count FROM packages") catch |err| {
+    const count_stmt = db.prepare(struct {}, CountResult, count_query) catch |err| {
         log.err("Failed to prepare count query: {}", .{err});
+        log.err("Count query: {s}", .{count_query});
         return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
             \\{
             \\  "error": "Failed to prepare database query"
@@ -591,11 +731,21 @@ fn api_get_packages(ctx: *const Context, _: void) !Respond {
 
     const count = if (count_result) |result| result.count else 0;
 
-    // Prepare and execute packages query with LIMIT and OFFSET
-    const PackageResult = struct { id: i64, name: sqlite.Text, url: sqlite.Text, description: ?sqlite.Text, author: ?sqlite.Text, created_at: sqlite.Text };
+    // Build main query
+    const main_query = if (needs_build_join)
+        try std.fmt.allocPrint(ctx.allocator, "SELECT DISTINCT p.id, p.name, p.url, p.description, p.author, p.license, p.created_at FROM packages p JOIN build_results br ON p.id = br.package_id{s} {s} LIMIT {d} OFFSET {d}", .{ where_clause.items, order_clause, limit, offset })
+    else
+        try std.fmt.allocPrint(ctx.allocator, "SELECT p.id, p.name, p.url, p.description, p.author, p.license, p.created_at FROM packages p{s} {s} LIMIT {d} OFFSET {d}", .{ where_clause.items, order_clause, limit, offset });
+    defer ctx.allocator.free(main_query);
 
-    const packages_stmt = db.prepare(struct {}, PackageResult, "SELECT id, name, url, description, author, created_at FROM packages ORDER BY created_at DESC LIMIT 20") catch |err| {
+    log.debug("API packages main query: {s}", .{main_query});
+
+    // Execute main query
+    const PackageResult = struct { id: i64, name: sqlite.Text, url: sqlite.Text, description: ?sqlite.Text, author: ?sqlite.Text, license: ?sqlite.Text, created_at: sqlite.Text };
+
+    const packages_stmt = db.prepare(struct {}, PackageResult, main_query) catch |err| {
         log.err("Failed to prepare packages query: {}", .{err});
+        log.err("Main query: {s}", .{main_query});
         return ctx.response.apply(.{ .status = .@"Internal Server Error", .mime = http.Mime.JSON, .body = 
             \\{
             \\  "error": "Failed to prepare packages query"
@@ -614,38 +764,110 @@ fn api_get_packages(ctx: *const Context, _: void) !Respond {
     };
     defer packages_stmt.reset();
 
-    // Build JSON response manually since we don't have a JSON library setup
+    // Build JSON response manually
     var response = std.ArrayList(u8).init(ctx.allocator);
-    defer response.deinit();
+    errdefer response.deinit();
 
-    const writer = response.writer();
-    try writer.print("{{\"packages\":[", .{});
+    const response_writer = response.writer();
+    try response_writer.print("{{\"packages\":[", .{});
 
     var first = true;
     while (packages_stmt.step() catch null) |pkg| {
-        if (!first) try writer.writeAll(",");
+        if (!first) try response_writer.writeAll(",");
         first = false;
 
-        try writer.print("{{\"id\":{d},\"name\":\"{s}\",\"url\":\"{s}\"", .{ pkg.id, pkg.name.data, pkg.url.data });
+        try response_writer.print("{{\"id\":{d},\"name\":\"{s}\",\"url\":\"{s}\"", .{ pkg.id, pkg.name.data, pkg.url.data });
 
         if (pkg.description) |desc| {
-            try writer.print(",\"description\":\"{s}\"", .{desc.data});
+            // Escape JSON string
+            const escaped_desc = try escapeJsonString(ctx.allocator, desc.data);
+            defer ctx.allocator.free(escaped_desc);
+            try response_writer.print(",\"description\":\"{s}\"", .{escaped_desc});
         } else {
-            try writer.writeAll(",\"description\":null");
+            try response_writer.writeAll(",\"description\":null");
         }
 
         if (pkg.author) |auth| {
-            try writer.print(",\"author\":\"{s}\"", .{auth.data});
+            const escaped_author = try escapeJsonString(ctx.allocator, auth.data);
+            defer ctx.allocator.free(escaped_author);
+            try response_writer.print(",\"author\":\"{s}\"", .{escaped_author});
         } else {
-            try writer.writeAll(",\"author\":null");
+            try response_writer.writeAll(",\"author\":null");
         }
 
-        try writer.print(",\"created_at\":\"{s}\"}}", .{pkg.created_at.data});
+        if (pkg.license) |lic| {
+            const escaped_license = try escapeJsonString(ctx.allocator, lic.data);
+            defer ctx.allocator.free(escaped_license);
+            try response_writer.print(",\"license\":\"{s}\"", .{escaped_license});
+        } else {
+            try response_writer.writeAll(",\"license\":null");
+        }
+
+        try response_writer.print(",\"created_at\":\"{s}\"", .{pkg.created_at.data});
+
+        // Add build results
+        try response_writer.writeAll(",\"build_results\":[");
+
+        // Fetch build results for this package
+        const BuildResultRow = struct { zig_version: sqlite.Text, build_status: sqlite.Text };
+        const build_query = "SELECT zig_version, build_status FROM build_results WHERE package_id = :package_id ORDER BY zig_version";
+
+        const build_stmt = db.prepare(struct { package_id: i64 }, BuildResultRow, build_query) catch |err| {
+            log.err("Failed to prepare build results query for package {d}: {}", .{ pkg.id, err });
+            try response_writer.writeAll("]");
+            try response_writer.writeAll("}");
+            continue;
+        };
+        defer build_stmt.finalize();
+
+        build_stmt.bind(.{ .package_id = pkg.id }) catch |err| {
+            log.err("Failed to bind build results query for package {d}: {}", .{ pkg.id, err });
+            try response_writer.writeAll("]");
+            try response_writer.writeAll("}");
+            continue;
+        };
+        defer build_stmt.reset();
+
+        var build_first = true;
+        while (build_stmt.step() catch null) |build_result| {
+            if (!build_first) try response_writer.writeAll(",");
+            build_first = false;
+
+            try response_writer.print("{{\"zig_version\":\"{s}\",\"build_status\":\"{s}\"}}", .{ build_result.zig_version.data, build_result.build_status.data });
+        }
+
+        try response_writer.writeAll("]}");
     }
 
-    try writer.print("],\"total\":{d},\"page\":1,\"limit\":20}}", .{count});
+    try response_writer.print("],\"total\":{d},\"page\":{d},\"limit\":{d}}}", .{ count, page, limit });
 
-    return ctx.response.apply(.{ .status = .OK, .mime = http.Mime.JSON, .body = response.items });
+    // Free allocated where clause parts
+    for (where_parts.items) |part| {
+        ctx.allocator.free(part);
+    }
+
+    // Transfer ownership of the response to the framework
+    const response_body = try response.toOwnedSlice();
+    return ctx.response.apply(.{ .status = .OK, .mime = http.Mime.JSON, .body = response_body });
+}
+
+// Helper function to escape JSON strings
+fn escapeJsonString(alloc: Allocator, input: []const u8) ![]u8 {
+    var result = std.ArrayList(u8).init(alloc);
+    defer result.deinit();
+
+    for (input) |char| {
+        switch (char) {
+            '"' => try result.appendSlice("\\\""),
+            '\\' => try result.appendSlice("\\\\"),
+            '\n' => try result.appendSlice("\\n"),
+            '\r' => try result.appendSlice("\\r"),
+            '\t' => try result.appendSlice("\\t"),
+            else => try result.append(char),
+        }
+    }
+
+    return result.toOwnedSlice();
 }
 
 fn api_create_package(ctx: *const Context, _: void) !Respond {

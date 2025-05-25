@@ -92,6 +92,14 @@ A comprehensive feature overview showing what's implemented and what's planned f
 - [x] Docker container management
 - [x] Build task creation and scheduling
 
+### Filters in packages page
+- [x] Add filters for:
+  - [x] Zig version
+  - [x] Build status
+  - [x] License
+  - [x] Author
+  - [x] Package name (search functionality)
+
 ### Package Discovery
 - [x] Manual package submission via web form
 - [x] Manual package submission via API
