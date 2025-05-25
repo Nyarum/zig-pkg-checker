@@ -10,7 +10,9 @@ RUN apk add --no-cache \
     ca-certificates \
     build-base \
     musl-dev \
-    linux-headers
+    linux-headers \
+    sqlite \
+    sqlite-dev
 
 # Install Zig with architecture detection
 ARG TARGETPLATFORM
@@ -33,6 +35,10 @@ WORKDIR /app
 COPY build.zig build.zig.zon ./
 COPY src/ ./src/
 COPY libs/ ./libs/
+
+# Set environment variables for C compilation
+ENV C_INCLUDE_PATH=/usr/include
+ENV CPATH=/usr/include
 
 # Build the application
 RUN zig build -Doptimize=ReleaseFast

@@ -80,8 +80,10 @@ help:
 
 install:
 	mkdir -p libs
-	git clone -b 098eee58cf62928aaf504af459855f0b8a5d5698 git@github.com:nDimensional/zig-sqlite.git libs/zig-sqlite
-	git clone -b 18ec7f1129ce4d0573b7c67f011b4d05c7b195d4 git@github.com:tardy-org/zzz.git libs/zzz
+	git clone git@github.com:nDimensional/zig-sqlite.git libs/zig-sqlite
+	cd libs/zig-sqlite && git checkout 098eee58cf62928aaf504af459855f0b8a5d5698
+	git clone git@github.com:tardy-org/zzz.git libs/zzz
+	cd libs/zzz && git checkout 18ec7f1129ce4d0573b7c67f011b4d05c7b195d4
 
 dev:
 	mkdir -p libs
